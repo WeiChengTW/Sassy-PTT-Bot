@@ -120,6 +120,11 @@ class SassyBrain:
             self.line_handler = WebhookHandler(LINE_CHANNEL_SECRET)
             line_config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
             self.line_api = MessagingApi(ApiClient(line_config))
+
+            @self.line_handler.add(MessageEvent, message=TextMessageContent)
+            def on_message(event):
+                self.handle_line_event(event)
+
             logger.info("LINE Bot 已啟用")
         else:
             logger.info("LINE Bot 未啟用（缺少 LINE_CHANNEL_SECRET 或 LINE_CHANNEL_ACCESS_TOKEN）")
@@ -288,11 +293,6 @@ def run_line_server(brain: SassyBrain):
         except InvalidSignatureError:
             abort(400)
         return 'OK'
-
-    # 把事件處理綁到 handler
-    @brain.line_handler.add(MessageEvent, message=TextMessageContent)
-    def on_message(event):
-        brain.handle_line_event(event)
 
     logger.info(f"LINE webhook server 啟動於 port {LINE_WEBHOOK_PORT}")
     flask_app.run(host="0.0.0.0", port=LINE_WEBHOOK_PORT)

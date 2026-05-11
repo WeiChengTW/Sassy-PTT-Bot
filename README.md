@@ -49,6 +49,46 @@ nlp_final_project/
 └── requirements.txt
 ```
 
+## 從零開始準備語料
+
+本專案的向量資料庫（`chroma_db/`）和原始語料（7.4GB）均不包含於 repo，需自行建立。
+
+### 步驟 1：爬取 PTT 八卦板文章
+
+使用 `PTT-Crawler-master/` 內的爬蟲抓取文章，輸出為 JSON 格式。
+每個 JSON 檔的結構應為：
+
+```json
+[
+  {
+    "Content": "文章內文",
+    "Responses": [
+      { "Content": "推文內容" }
+    ]
+  }
+]
+```
+
+將所有 JSON 檔放入：
+
+```
+PTT-Crawler-master/data_Gossiping_2025/
+```
+
+### 步驟 2：建立向量索引
+
+```bash
+source venv/bin/activate
+python indexer.py
+```
+
+執行完成後會在 `PTT-Crawler-master/chroma_db/` 建立向量資料庫。
+預設最多索引 100,000 筆語料（可在 `indexer.py` 的 `MAX_DOCUMENTS` 調整）。
+
+> 語料越多、涵蓋話題越廣，RAG 檢索效果越好。建議至少準備 **5 萬筆以上**的推文。
+
+---
+
 ## 啟動指南
 
 ### 環境需求

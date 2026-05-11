@@ -92,7 +92,7 @@ def should_trigger(text, always=False):
     if always:
         return True
     if any(kw in text for kw in TRIGGER_KEYWORDS):
-        return random.random() < 0.7
+        return random.random() < 0.3
     return random.random() < 0.1
 
 

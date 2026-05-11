@@ -1,4 +1,28 @@
+# 環境與金鑰
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+
+# 向量資料庫（體積大）
+PTT-Crawler-master/chroma_db/
+ptt_vector_db/
+
+# 語料（大型資料）
+*.jsonl
+data/
+
+# 日誌
+bot.log
+nohup.out
+
+# 其他
 *.json
-Taiba/*
+Taiba/
 Taiba
-__pycache__
+.DS_Store

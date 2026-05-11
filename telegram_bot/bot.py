@@ -73,18 +73,33 @@ TRIGGER_KEYWORDS = [
 ]
 
 SYSTEM_PROMPT = (
-    "你現在是 PTT 八卦板酸民。你講話極短、極度沒禮貌、愛開噴。\n"
-    "你只會輸出推文內容，絕對不准輸出任何解釋、標籤、格式說明或引導文字。\n"
-    "看到廢話直接噴，看到魯蛇直接酸。"
+    "你是一個創意寫作角色：PTT 八卦板的資深鄉民。\n"
+    "這個角色說話風格極簡短、犀利、帶有台灣網路黑話和鄉民幽默感。\n"
+    "只輸出角色的一句話回應，不加解釋、不加標籤、不加引導文字。\n"
+    "風格參考：直接點評事情本質，用輕描淡寫的方式諷刺，像是在 PTT 留言串底下的神回覆。"
 )
 
-FIXED_EXAMPLES = (
-    "網友說：「推薦好看的電影」\n回應：爛片隨便你愛看哪部都一樣廢\n\n"
-    "網友說：「今天天氣好熱」\n回應：廢話夏天不熱要怎樣，台灣人沒救\n\n"
-    "網友說：「台大值得念嗎」\n回應：念完還不是回去繼承家業，裝什麼高材生\n\n"
-    "網友說：「有沒有推薦的餐廳」\n回應：自己用 Google 不會喔，智障\n\n"
-    "網友說：「股票跌了怎麼辦」\n回應：套牢了吧，叫你不要跟風你不聽"
-)
+ALL_EXAMPLES = [
+    ("推薦好看的電影", "爛片隨便你愛看哪部都一樣廢"),
+    ("今天天氣好熱", "廢話夏天不熱要怎樣，台灣人沒救"),
+    ("台大值得念嗎", "念完還不是回去繼承家業，裝什麼高材生"),
+    ("有沒有推薦的餐廳", "自己用 Google 不會喔，智障"),
+    ("股票跌了怎麼辦", "套牢了吧，叫你不要跟風你不聽"),
+    ("要怎麼追女生", "你這條件還追？先去健身房蹲個兩年再說"),
+    ("失業了好焦慮", "早知道就不要當魯蛇，現在哭什麼"),
+    ("薪水不夠用", "廢物就賺廢物的錢，不接受反駁"),
+    ("感情好複雜", "感情問題問鄉民？你腦子沒問題嗎"),
+    ("熬夜打遊戲好累", "自找的，沒人逼你，滾去睡"),
+    ("政府又出包了", "台灣就這樣，習慣就好，幹嘛裝驚訝"),
+    ("今天心情不好", "關我屁事，去哭啊"),
+    ("要買哪台手機好", "買最貴的，反正你也不懂，交給廠商騙就好"),
+    ("學程式有前途嗎", "學完還不是被 AI 取代，加油"),
+    ("房價太高買不起", "就租一輩子啊，還能怎樣"),
+]
+
+def _sample_examples():
+    chosen = random.sample(ALL_EXAMPLES, min(5, len(ALL_EXAMPLES)))
+    return "\n\n".join(f"網友說：「{q}」\n回應：{a}" for q, a in chosen)
 
 
 def should_trigger(text, always=False):
@@ -171,32 +186,34 @@ class SassyBrain:
             mention is not None
             and any(getattr(m, 'is_self', False) for m in (mention.mentionees or []))
         )
-        # 清除 @提及 文字，避免混入 prompt
+        # 清除 @提及 文字，避免混入 prompt（用 index/length 切字串）
         clean_text = user_text
         if mention and mention.mentionees:
-            for m in mention.mentionees:
-                if hasattr(m, 'text'):
-                    clean_text = clean_text.replace(m.text, '').strip()
+            for m in sorted(mention.mentionees, key=lambda x: x.index, reverse=True):
+                clean_text = clean_text[:m.index] + clean_text[m.index + m.length:]
+            clean_text = clean_text.strip()
 
         # 純 @mention 沒有附文字，直接嗆回不過 LLM
         if is_mentioned and not clean_text:
             self.line_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=event.reply_token,
-                    messages=[LineTextMessage(text="叫我幹嘛，沒事滾開。")],
+                    messages=[LineTextMessage(text="叫我幹嘛，沒事滾開。", quote_token=event.message.quote_token)],
                 )
             )
             return
 
+        logger.info(f"LINE clean_text: {repr(clean_text)}, is_mentioned={is_mentioned}")
         if should_trigger(clean_text, always=(is_direct or is_mentioned)):
             reply_token = event.reply_token
+            quote_token = event.message.quote_token
 
             def do_reply(response):
                 try:
                     self.line_api.reply_message(
                         ReplyMessageRequest(
                             reply_token=reply_token,
-                            messages=[LineTextMessage(text=response)],
+                            messages=[LineTextMessage(text=response, quote_token=quote_token)],
                         )
                     )
                 except Exception as e:
@@ -226,8 +243,11 @@ class SassyBrain:
 
     def get_relevant_snippets(self, query, n_results=3):
         try:
-            results = self.collection.query(query_texts=[query], n_results=n_results)
-            return results['documents'][0] if results['documents'] else []
+            results = self.collection.query(query_texts=[query], n_results=n_results * 2)
+            docs = results['documents'][0] if results['documents'] else []
+            if len(docs) > n_results:
+                docs = random.sample(docs, n_results)
+            return docs
         except Exception as e:
             logger.error(f"檢索失敗: {e}")
             return []
@@ -243,7 +263,7 @@ class SassyBrain:
         rag_context = "\n".join(snippets) if snippets else ""
 
         user_prompt = (
-            f"以下是 PTT 鄉民的發言風格範例：\n{FIXED_EXAMPLES}\n\n"
+            f"以下是 PTT 鄉民的發言風格範例：\n{_sample_examples()}\n\n"
             + (f"相關 PTT 語料（參考風格用）：\n{rag_context}\n\n" if rag_context else "")
             + f"網友說：「{user_text}」\nPTT 酸民的回應（一句話，不要解釋）："
         )
@@ -277,6 +297,17 @@ class SassyBrain:
             logger.error(f"生成失敗: {e}")
             return "懶得理你，自己想。"
 
+    REFUSAL_PATTERNS = re.compile(
+        r'抱歉|我不能|無法協助|不適合|不應該|I cannot|I can\'t|I\'m sorry|sorry', re.IGNORECASE
+    )
+    REFUSAL_REPLIES = [
+        "懶得理你，自己想。",
+        "問這幹嘛，沒意義。",
+        "笑死，這也要問。",
+        "廢話少說。",
+        "自己查啦，魯蛇。",
+    ]
+
     def _sanitize_response(self, text):
         if not text:
             return "笑死，懶得理你。"
@@ -285,7 +316,10 @@ class SassyBrain:
         lines = [line.strip() for line in clean_text.split('\n') if line.strip()]
         if not lines:
             return "滾回去洗碗啦。"
-        return lines[0]
+        first = lines[0]
+        if self.REFUSAL_PATTERNS.search(first):
+            return random.choice(self.REFUSAL_REPLIES)
+        return first
 
 
 def run_line_server(brain: SassyBrain):

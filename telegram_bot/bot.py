@@ -17,7 +17,7 @@ try:
     from linebot.v3 import WebhookHandler
     from linebot.v3.messaging import (
         Configuration, ApiClient, MessagingApi,
-        ReplyMessageRequest, TextMessage as LineTextMessage,
+        ReplyMessageRequest, PushMessageRequest, TextMessage as LineTextMessage,
     )
     from linebot.v3.webhooks import MessageEvent, TextMessageContent
     from linebot.v3.exceptions import InvalidSignatureError
@@ -167,13 +167,25 @@ class SassyBrain:
                     clean_text = clean_text.replace(m.text, '').strip()
 
         if should_trigger(clean_text, always=(is_direct or is_mentioned)):
-            response = asyncio.run(self.generate_response(clean_text))
-            self.line_api.reply_message(
-                ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[LineTextMessage(text=response)],
+            # 取得推送目標 ID（reply token 會因 LLM 延遲而過期，改用 push）
+            source = event.source
+            if source.type == "user":
+                target_id = source.user_id
+            elif source.type == "group":
+                target_id = source.group_id
+            else:
+                target_id = source.room_id
+
+            def push_async():
+                response = asyncio.run(self.generate_response(clean_text))
+                self.line_api.push_message(
+                    PushMessageRequest(
+                        to=target_id,
+                        messages=[LineTextMessage(text=response)],
+                    )
                 )
-            )
+
+            threading.Thread(target=push_async, daemon=True).start()
 
     # ── Core logic ─────────────────────────────────────────────────────────
 

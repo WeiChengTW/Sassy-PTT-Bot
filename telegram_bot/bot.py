@@ -189,44 +189,38 @@ class SassyBrain:
             return
 
         if should_trigger(clean_text, always=(is_direct or is_mentioned)):
-            # 取得推送目標 ID（reply token 會因 LLM 延遲而過期，改用 push）
-            source = event.source
-            if source.type == "user":
-                target_id = source.user_id
-            elif source.type == "group":
-                target_id = source.group_id
-            else:
-                target_id = source.room_id
+            reply_token = event.reply_token
 
-            if is_direct or is_mentioned:
-                # @mention / 私訊：排隊一定回
-                def push_mention():
-                    with self._llm_sem:
-                        response = asyncio.run(self.generate_response(clean_text))
-                    self.line_api.push_message(
-                        PushMessageRequest(
-                            to=target_id,
+            def do_reply(response):
+                try:
+                    self.line_api.reply_message(
+                        ReplyMessageRequest(
+                            reply_token=reply_token,
                             messages=[LineTextMessage(text=response)],
                         )
                     )
-                threading.Thread(target=push_mention, daemon=True).start()
+                except Exception as e:
+                    logger.error(f"LINE reply 失敗: {e}")
+
+            if is_direct or is_mentioned:
+                # @mention / 私訊：排隊一定回（reply token 30 秒內有效）
+                def reply_mention():
+                    with self._llm_sem:
+                        response = asyncio.run(self.generate_response(clean_text))
+                    do_reply(response)
+                threading.Thread(target=reply_mention, daemon=True).start()
             else:
                 # 70%/10% 觸發：搶不到 lock 就跳過
-                def push_spontaneous():
+                def reply_spontaneous():
                     if not self._spontaneous_lock.acquire(blocking=False):
                         logger.info("spontaneous 觸發跳過（已有處理中）")
                         return
                     try:
                         response = asyncio.run(self.generate_response(clean_text))
-                        self.line_api.push_message(
-                            PushMessageRequest(
-                                to=target_id,
-                                messages=[LineTextMessage(text=response)],
-                            )
-                        )
+                        do_reply(response)
                     finally:
                         self._spontaneous_lock.release()
-                threading.Thread(target=push_spontaneous, daemon=True).start()
+                threading.Thread(target=reply_spontaneous, daemon=True).start()
 
     # ── Core logic ─────────────────────────────────────────────────────────
 

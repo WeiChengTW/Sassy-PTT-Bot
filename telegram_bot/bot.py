@@ -242,7 +242,7 @@ class SassyBrain:
             return self._sanitize_response(raw_text)
         except Exception as e:
             logger.error(f"生成失敗: {e}")
-            return "笑死，這也要問，滾好嗎。"
+            return "懶得理你，自己想。"
 
     def _sanitize_response(self, text):
         if not text:

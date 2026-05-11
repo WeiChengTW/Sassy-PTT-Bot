@@ -109,6 +109,7 @@ class SassyBrain:
         else:
             logger.warning("No CGU_LLM_API_KEY found.")
             self.llm = None
+        self._llm_sem = threading.Semaphore(1)  # 限制同時只有 1 個 LLM 請求
 
         # LINE setup
         self.line_api = None
@@ -177,7 +178,8 @@ class SassyBrain:
                 target_id = source.room_id
 
             def push_async():
-                response = asyncio.run(self.generate_response(clean_text))
+                with self._llm_sem:
+                    response = asyncio.run(self.generate_response(clean_text))
                 self.line_api.push_message(
                     PushMessageRequest(
                         to=target_id,
@@ -201,6 +203,9 @@ class SassyBrain:
         if not self.llm:
             return "笑死，連 Key 都沒有，你比我還窮。"
 
+        import time
+        t0 = time.time()
+
         snippets = self.get_relevant_snippets(user_text)
         rag_context = "\n".join(snippets) if snippets else ""
 
@@ -220,8 +225,10 @@ class SassyBrain:
                 temperature=1.0,
                 max_completion_tokens=3000,
             )
+            elapsed = time.time() - t0
             choice = resp.choices[0]
             raw_text = choice.message.content or ""
+            logger.info(f"回應時間: {elapsed:.1f}s")
             logger.info(f"模型原始輸出: {repr(raw_text)} | finish_reason: {choice.finish_reason}")
             return self._sanitize_response(raw_text)
         except Exception as e:

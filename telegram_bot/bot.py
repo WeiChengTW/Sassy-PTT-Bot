@@ -34,6 +34,7 @@ logging.basicConfig(
         logging.StreamHandler(),
     ]
 )
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # --- 2. 環境變數載入 ---

@@ -1,6 +1,6 @@
 # 八卦分身 (Sassy PTT Bot)
 
-一個模仿 PTT 八卦版 (Gossiping) 風格的 Telegram 聊天機器人。不提供幫助，只提供毒舌。
+一個模仿 PTT 八卦版 (Gossiping) 風格的聊天機器人，同時支援 **Telegram** 和 **LINE**。不提供幫助，只提供毒舌。
 
 ## 核心理念
 
@@ -13,7 +13,8 @@
 | LLM | `gpt-5-mini`（OpenAI 相容 API） |
 | 向量資料庫 | ChromaDB |
 | 嵌入模型 | `sentence-transformers/all-MiniLM-L6-v2` |
-| 機器人框架 | `python-telegram-bot`（非同步） |
+| Telegram 框架 | `python-telegram-bot`（非同步） |
+| LINE 框架 | `line-bot-sdk` v3 + Flask webhook |
 
 ### 運作流程
 
@@ -21,10 +22,15 @@
 
 Bot 不會對每條訊息回應，模擬真實鄉民的「隨緣」特性：
 
-- `@nonsenseTW_bot` 直接提及 → 100% 回應
-- 訊息中有人回覆 Bot 的訊息 → 100% 回應
+**Telegram**
+- `@bot` 直接提及 → 100% 回應
 - 包含問句關鍵字（為什麼、怎麼、推薦、有沒有、股票、感情⋯⋯等 30+ 詞）→ 70% 機率回應
 - 其他訊息 → 10% 機率隨機發作
+
+**LINE**
+- 私訊（1:1）→ 100% 回應
+- 群組內含關鍵字 → 70% 機率回應
+- 群組其他訊息 → 10% 機率隨機發作
 
 **步驟 B：語料檢索 (RAG)**
 
@@ -94,16 +100,34 @@ python indexer.py
 ### 環境需求
 
 - Python 3.11+
-- 套件：`python-telegram-bot`, `chromadb`, `sentence-transformers`, `openai`, `python-dotenv`
+- 套件：`python-telegram-bot`, `chromadb`, `sentence-transformers`, `openai`, `python-dotenv`, `line-bot-sdk`, `flask`
+
+```bash
+pip install python-telegram-bot chromadb sentence-transformers openai python-dotenv line-bot-sdk flask
+```
 
 ### 環境變數
 
 在專案根目錄建立 `.env`：
 
 ```env
+# Telegram（必填）
 TELEGRAM_TOKEN=your_telegram_bot_token
+
+# LLM API（必填）
 CGU_LLM_API_KEY=your_api_key
+
+# LINE（選填，不填則只啟動 Telegram）
+LINE_CHANNEL_SECRET=your_line_channel_secret
+LINE_CHANNEL_ACCESS_TOKEN=your_line_channel_access_token
+LINE_WEBHOOK_PORT=5000
 ```
+
+> LINE Bot 需要公開的 HTTPS 端點才能接收 webhook。本機開發可用 [ngrok](https://ngrok.com/)：
+> ```bash
+> ngrok http 5000
+> ```
+> 將 ngrok 產生的 URL + `/line/callback` 填入 LINE Developers Console 的 Webhook URL。
 
 ### 啟動
 
@@ -114,5 +138,6 @@ python telegram_bot/bot.py
 
 啟動成功會看到：
 ```
-機器人已啟動 (gpt-5-mini 模式)。
+Telegram 機器人已啟動 (gpt-5-mini 模式)。
+LINE webhook server 啟動於 port 5000   # 若有設定 LINE 環境變數
 ```

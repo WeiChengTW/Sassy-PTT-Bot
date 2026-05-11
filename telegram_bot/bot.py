@@ -2,12 +2,28 @@ import os
 import random
 import logging
 import re
+import asyncio
+import threading
 from pathlib import Path
 import chromadb
 from chromadb.utils import embedding_functions
 from openai import AsyncOpenAI
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+
+# LINE SDK (optional)
+try:
+    from flask import Flask, request, abort
+    from linebot.v3 import WebhookHandler
+    from linebot.v3.messaging import (
+        Configuration, ApiClient, MessagingApi,
+        ReplyMessageRequest, TextMessage as LineTextMessage,
+    )
+    from linebot.v3.webhooks import MessageEvent, TextMessageContent
+    from linebot.v3.exceptions import InvalidSignatureError
+    LINE_SDK_AVAILABLE = True
+except ImportError:
+    LINE_SDK_AVAILABLE = False
 
 # --- 1. 日誌設定 ---
 logging.basicConfig(
@@ -38,6 +54,23 @@ CHROMA_DB_PATH = str(Path(__file__).resolve().parents[1] / "PTT-Crawler-master" 
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 GENERATION_MODEL_NAME = "gpt-5-mini"
 
+LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+LINE_WEBHOOK_PORT = int(os.getenv("LINE_WEBHOOK_PORT", "5000"))
+
+TRIGGER_KEYWORDS = [
+    # 疑問句
+    "為什麼", "怎麼", "怎樣", "如何", "哪裡", "哪個", "什麼", "幾點", "多少",
+    # 求推薦／意見
+    "推薦", "有沒有", "好嗎", "值得", "覺得", "建議", "選哪",
+    # PTT 用語
+    "卦", "八卦", "懶人包", "魯蛇", "肥宅", "正妹", "帥哥",
+    # 熱門話題
+    "股票", "政治", "薪水", "工作", "女友", "男友", "感情", "大學", "考試",
+    # 情緒觸發詞
+    "笑死", "幹", "靠北", "三小", "啊不就",
+]
+
 SYSTEM_PROMPT = (
     "你現在是 PTT 八卦板酸民。你講話極短、極度沒禮貌、愛開噴。\n"
     "你只會輸出推文內容，絕對不准輸出任何解釋、標籤、格式說明或引導文字。\n"
@@ -51,6 +84,16 @@ FIXED_EXAMPLES = (
     "網友說：「有沒有推薦的餐廳」\n回應：自己用 Google 不會喔，智障\n\n"
     "網友說：「股票跌了怎麼辦」\n回應：套牢了吧，叫你不要跟風你不聽"
 )
+
+
+def should_trigger(text, always=False):
+    """判斷是否應該回應。always=True 代表直接提及（如 @bot 或私訊）。"""
+    if always:
+        return True
+    if any(kw in text for kw in TRIGGER_KEYWORDS):
+        return random.random() < 0.7
+    return random.random() < 0.1
+
 
 class SassyBrain:
     def __init__(self):
@@ -67,40 +110,61 @@ class SassyBrain:
             logger.warning("No CGU_LLM_API_KEY found.")
             self.llm = None
 
+        # LINE setup
+        self.line_api = None
+        self.line_handler = None
+        if LINE_SDK_AVAILABLE and LINE_CHANNEL_SECRET and LINE_CHANNEL_ACCESS_TOKEN:
+            self.line_handler = WebhookHandler(LINE_CHANNEL_SECRET)
+            line_config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
+            self.line_api = MessagingApi(ApiClient(line_config))
+            logger.info("LINE Bot 已啟用")
+        else:
+            logger.info("LINE Bot 未啟用（缺少 LINE_CHANNEL_SECRET 或 LINE_CHANNEL_ACCESS_TOKEN）")
+
+    # ── Telegram handlers ──────────────────────────────────────────────────
+
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("笑死，又來一個魯蛇。想問什麼快說啦，我很忙。")
 
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def handle_telegram_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_text = update.message.text
         if not user_text:
             return
 
-        should_respond = False
         bot_username = (await context.bot.get_me()).username
+        mentioned = f"@{bot_username}" in user_text
+        clean_text = re.sub(rf'@{bot_username}\s*', '', user_text).strip()
 
-        if f"@{bot_username}" in user_text:
-            should_respond = True
-        elif any(kw in user_text for kw in [
-            # 疑問句
-            "為什麼", "怎麼", "怎樣", "如何", "哪裡", "哪個", "什麼", "幾點", "多少",
-            # 求推薦／意見
-            "推薦", "有沒有", "好嗎", "值得", "覺得", "建議", "選哪",
-            # PTT 用語
-            "卦", "八卦", "懶人包", "魯蛇", "肥宅", "正妹", "帥哥",
-            # 熱門話題
-            "股票", "政治", "薪水", "工作", "女友", "男友", "感情", "大學", "考試",
-            # 情緒觸發詞
-            "笑死", "幹", "靠北", "三小", "啊不就",
-        ]):
-            if random.random() < 0.7:
-                should_respond = True
-        elif random.random() < 0.1:
-            should_respond = True
-
-        if should_respond:
-            clean_user_text = re.sub(rf'@{bot_username}\s*', '', user_text).strip()
-            response = await self.generate_response(clean_user_text)
+        if should_trigger(clean_text, always=mentioned):
+            response = await self.generate_response(clean_text)
             await update.message.reply_text(response)
+
+    # ── LINE handlers ──────────────────────────────────────────────────────
+
+    def handle_line_event(self, event):
+        """同步 LINE 事件處理（Flask 呼叫，用 asyncio.run 橋接非同步）。"""
+        if not isinstance(event, MessageEvent):
+            return
+        if not isinstance(event.message, TextMessageContent):
+            return
+
+        user_text = event.message.text
+        if not user_text:
+            return
+
+        # 私訊（user）永遠回應；群組（group/room）套關鍵字邏輯
+        is_direct = event.source.type == "user"
+
+        if should_trigger(user_text, always=is_direct):
+            response = asyncio.run(self.generate_response(user_text))
+            self.line_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[LineTextMessage(text=response)],
+                )
+            )
+
+    # ── Core logic ─────────────────────────────────────────────────────────
 
     def get_relevant_snippets(self, query, n_results=3):
         try:
@@ -144,26 +208,56 @@ class SassyBrain:
     def _sanitize_response(self, text):
         if not text:
             return "笑死，懶得理你。"
-
         clean_text = text.strip()
         clean_text = re.sub(r'^([→推噓]|鄉民推：)\s*', '', clean_text)
-
         lines = [line.strip() for line in clean_text.split('\n') if line.strip()]
         if not lines:
             return "滾回去洗碗啦。"
-
         return lines[0]
+
+
+def run_line_server(brain: SassyBrain):
+    """在獨立執行緒中跑 Flask LINE webhook server。"""
+    flask_app = Flask(__name__)
+
+    @flask_app.route("/line/callback", methods=['POST'])
+    def line_callback():
+        signature = request.headers.get('X-Line-Signature', '')
+        body = request.get_data(as_text=True)
+        try:
+            brain.line_handler.handle(body, signature)
+        except InvalidSignatureError:
+            abort(400)
+        return 'OK'
+
+    # 把事件處理綁到 handler
+    @brain.line_handler.add(MessageEvent, message=TextMessageContent)
+    def on_message(event):
+        brain.handle_line_event(event)
+
+    logger.info(f"LINE webhook server 啟動於 port {LINE_WEBHOOK_PORT}")
+    flask_app.run(host="0.0.0.0", port=LINE_WEBHOOK_PORT)
+
 
 def main():
     if not TELEGRAM_TOKEN:
         logger.error("錯誤：請設定 TELEGRAM_TOKEN")
         return
-    bot_logic = SassyBrain()
+
+    brain = SassyBrain()
+
+    # 啟動 LINE server（若有設定）
+    if brain.line_handler:
+        t = threading.Thread(target=run_line_server, args=(brain,), daemon=True)
+        t.start()
+
+    # 啟動 Telegram polling
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", bot_logic.start))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), bot_logic.handle_message))
-    logger.info(f"機器人已啟動 ({GENERATION_MODEL_NAME} 模式)。")
+    app.add_handler(CommandHandler("start", brain.start))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), brain.handle_telegram_message))
+    logger.info(f"Telegram 機器人已啟動 ({GENERATION_MODEL_NAME} 模式)。")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()

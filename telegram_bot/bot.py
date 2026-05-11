@@ -109,7 +109,7 @@ class SassyBrain:
         else:
             logger.warning("No CGU_LLM_API_KEY found.")
             self.llm = None
-        self._llm_sem = threading.Semaphore(1)  # 限制同時只有 1 個 LLM 請求
+        self._llm_sem = threading.Semaphore(2)  # 最多 2 個並行 LLM 請求
 
         # LINE setup
         self.line_api = None
@@ -216,15 +216,24 @@ class SassyBrain:
         )
 
         try:
-            resp = await self.llm.chat.completions.create(
-                model=GENERATION_MODEL_NAME,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=1.0,
-                max_completion_tokens=3000,
-            )
+            for attempt in range(3):
+                try:
+                    resp = await self.llm.chat.completions.create(
+                        model=GENERATION_MODEL_NAME,
+                        messages=[
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        temperature=1.0,
+                        max_completion_tokens=3000,
+                    )
+                    break
+                except Exception as e:
+                    if "429" in str(e) and attempt < 2:
+                        logger.warning(f"429 rate limit，5s 後重試 (attempt {attempt+1})")
+                        await asyncio.sleep(5)
+                    else:
+                        raise
             elapsed = time.time() - t0
             choice = resp.choices[0]
             raw_text = choice.message.content or ""

@@ -110,7 +110,8 @@ class SassyBrain:
         else:
             logger.warning("No CGU_LLM_API_KEY found.")
             self.llm = None
-        self._llm_sem = threading.Semaphore(2)  # 最多 2 個並行 LLM 請求
+        self._llm_sem = threading.Semaphore(2)       # @mention 排隊用
+        self._spontaneous_lock = threading.Lock()    # 70%/10% 觸發：同時只能一個，否則跳過
 
         # LINE setup
         self.line_api = None
@@ -178,17 +179,35 @@ class SassyBrain:
             else:
                 target_id = source.room_id
 
-            def push_async():
-                with self._llm_sem:
-                    response = asyncio.run(self.generate_response(clean_text))
-                self.line_api.push_message(
-                    PushMessageRequest(
-                        to=target_id,
-                        messages=[LineTextMessage(text=response)],
+            if is_direct or is_mentioned:
+                # @mention / 私訊：排隊一定回
+                def push_mention():
+                    with self._llm_sem:
+                        response = asyncio.run(self.generate_response(clean_text))
+                    self.line_api.push_message(
+                        PushMessageRequest(
+                            to=target_id,
+                            messages=[LineTextMessage(text=response)],
+                        )
                     )
-                )
-
-            threading.Thread(target=push_async, daemon=True).start()
+                threading.Thread(target=push_mention, daemon=True).start()
+            else:
+                # 70%/10% 觸發：搶不到 lock 就跳過
+                def push_spontaneous():
+                    if not self._spontaneous_lock.acquire(blocking=False):
+                        logger.info("spontaneous 觸發跳過（已有處理中）")
+                        return
+                    try:
+                        response = asyncio.run(self.generate_response(clean_text))
+                        self.line_api.push_message(
+                            PushMessageRequest(
+                                to=target_id,
+                                messages=[LineTextMessage(text=response)],
+                            )
+                        )
+                    finally:
+                        self._spontaneous_lock.release()
+                threading.Thread(target=push_spontaneous, daemon=True).start()
 
     # ── Core logic ─────────────────────────────────────────────────────────
 

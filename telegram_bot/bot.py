@@ -143,6 +143,10 @@ class SassyBrain:
         mentioned = f"@{bot_username}" in user_text
         clean_text = re.sub(rf'@{bot_username}\s*', '', user_text).strip()
 
+        if mentioned and not clean_text:
+            await update.message.reply_text("叫我幹嘛，沒事滾開。")
+            return
+
         if should_trigger(clean_text, always=mentioned):
             response = await self.generate_response(clean_text)
             await update.message.reply_text(response)
@@ -173,6 +177,16 @@ class SassyBrain:
             for m in mention.mentionees:
                 if hasattr(m, 'text'):
                     clean_text = clean_text.replace(m.text, '').strip()
+
+        # 純 @mention 沒有附文字，直接嗆回不過 LLM
+        if is_mentioned and not clean_text:
+            self.line_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[LineTextMessage(text="叫我幹嘛，沒事滾開。")],
+                )
+            )
+            return
 
         if should_trigger(clean_text, always=(is_direct or is_mentioned)):
             # 取得推送目標 ID（reply token 會因 LLM 延遲而過期，改用 push）

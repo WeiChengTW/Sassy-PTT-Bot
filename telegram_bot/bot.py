@@ -152,11 +152,22 @@ class SassyBrain:
         if not user_text:
             return
 
-        # 私訊（user）永遠回應；群組（group/room）套關鍵字邏輯
+        # 私訊（user）永遠回應；群組內 @bot 也永遠回應
         is_direct = event.source.type == "user"
+        mention = event.message.mention
+        is_mentioned = (
+            mention is not None
+            and any(getattr(m, 'is_self', False) for m in (mention.mentionees or []))
+        )
+        # 清除 @提及 文字，避免混入 prompt
+        clean_text = user_text
+        if mention and mention.mentionees:
+            for m in mention.mentionees:
+                if hasattr(m, 'text'):
+                    clean_text = clean_text.replace(m.text, '').strip()
 
-        if should_trigger(user_text, always=is_direct):
-            response = asyncio.run(self.generate_response(user_text))
+        if should_trigger(clean_text, always=(is_direct or is_mentioned)):
+            response = asyncio.run(self.generate_response(clean_text))
             self.line_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=event.reply_token,

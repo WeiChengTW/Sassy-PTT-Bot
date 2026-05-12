@@ -186,19 +186,21 @@ class SassyBrain:
             mention is not None
             and any(getattr(m, 'is_self', False) for m in (mention.mentionees or []))
         )
-        # 清除 @提及 文字，避免混入 prompt（用 index/length 切字串）
+        # 只清除 bot 自己的 @mention，其他人的保留
         clean_text = user_text
         if mention and mention.mentionees:
             for m in sorted(mention.mentionees, key=lambda x: x.index, reverse=True):
-                clean_text = clean_text[:m.index] + clean_text[m.index + m.length:]
+                if getattr(m, 'is_self', False):
+                    clean_text = clean_text[:m.index] + clean_text[m.index + m.length:]
             clean_text = clean_text.strip()
 
         # 純 @mention 沒有附文字，直接嗆回不過 LLM
         if is_mentioned and not clean_text:
+            qt = event.message.quote_token
             self.line_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=event.reply_token,
-                    messages=[LineTextMessage(text="叫我幹嘛，沒事滾開。", quote_token=event.message.quote_token)],
+                    messages=[LineTextMessage(text="叫我幹嘛，沒事滾開。", **({'quote_token': qt} if qt else {}))],
                 )
             )
             return
@@ -210,12 +212,11 @@ class SassyBrain:
 
             def do_reply(response):
                 try:
+                    msg = LineTextMessage(text=response, **({'quote_token': quote_token} if quote_token else {}))
                     self.line_api.reply_message(
-                        ReplyMessageRequest(
-                            reply_token=reply_token,
-                            messages=[LineTextMessage(text=response, quote_token=quote_token)],
-                        )
+                        ReplyMessageRequest(reply_token=reply_token, messages=[msg])
                     )
+                    logger.info(f"LINE reply 成功: {repr(response[:30])}")
                 except Exception as e:
                     logger.error(f"LINE reply 失敗: {e}")
 

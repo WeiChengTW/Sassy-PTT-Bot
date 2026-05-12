@@ -4,220 +4,165 @@ import json
 import requests
 import time
 import os
-
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
 from bs4.element import NavigableString
 
-
 def main():
-
+    board = "Gossiping"
     crawler = PttCrawler()
-    crawler.crawl(board="Gossiping", start=37900, end=38900)
-
-    # res = crawler.parse_article("https://www.ptt.cc/bbs/Gossiping/M.1119928928.A.78A.html")
-    # crawler.output("test", res)
-
+    crawler.crawl_by_date(board=board, target_date="2025-01-01")
 
 class PttCrawler:
-
     root = "https://www.ptt.cc/bbs/"
     main = "https://www.ptt.cc"
     gossip_data = {"from": "bbs/Gossiping/index.html", "yes": "yes"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
 
     def __init__(self):
         self.session = requests.session()
+        self.session.headers.update(self.headers)
         requests.packages.urllib3.disable_warnings()
-        self.session.post(
-            "https://www.ptt.cc/ask/over18", verify=False, data=self.gossip_data
-        )
+        self._safe_request("POST", "https://www.ptt.cc/ask/over18", data=self.gossip_data)
+
+    def _safe_request(self, method, url, **kwargs):
+        max_retries = 5
+        backoff = 2
+        for i in range(max_retries):
+            try:
+                if method == "GET":
+                    return self.session.get(url, verify=False, **kwargs)
+                elif method == "POST":
+                    return self.session.post(url, verify=False, **kwargs)
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                if i == max_retries - 1:
+                    raise e
+                wait = backoff ** (i + 1)
+                print(f"Connection error, retrying in {wait}s... ({i+1}/{max_retries})")
+                time.sleep(wait)
 
     def articles(self, page):
-        """文章內容的生成器
-        Args:
-            page: 頁面網址
-        Returns:
-            文章內容的生成器
-        """
-
-        res = self.session.get(page, verify=False)
+        res = self._safe_request("GET", page)
         soup = BeautifulSoup(res.text, "lxml")
-
         for article in soup.select(".r-ent"):
             try:
                 yield self.main + article.select(".title")[0].select("a")[0].get("href")
             except:
-                pass  # (本文已被刪除)
+                pass
 
-    def pages(self, board=None, index_range=None):
-        """頁面網址的生成器
-        Args:
-            board: 看板名稱
-            index_range: 文章頁數範圍
-        Returns:
-            網址的生成器
-        """
-
-        target_page = self.root + board + "/index"
-
-        if range is None:
-            yield target_page + ".html"
-        else:
-            for index in index_range:
-                yield target_page + str(index) + ".html"
-
-    def parse_article(self, url, mode):
-        """解析爬取的文章，整理進dict
-        Args:
-            url: 欲爬取的PTT頁面網址
-            mode: 欲爬取回文的模式。全部(all)、推文(up)、噓文(down)、純回文(normal)
-        Returns:
-            article: 爬取文章後資料的dict
-
-        """
-
-        # 處理mode標誌
-        if mode == "all":
-            mode = "all"
-        elif mode == "up":
-            mode = "推"
-        elif mode == "down":
-            mode = "噓"
-        elif mode == "normal":
-            mode = "→"
-        else:
+    def parse_article(self, url, mode="all"):
+        if mode == "all": 
+            mode_tag = "all"
+        elif mode == "up": 
+            mode_tag = "推"
+        elif mode == "down": 
+            mode_tag = "噓"
+        elif mode == "normal": 
+            mode_tag = "→"
+        else: 
             raise ValueError("mode變數錯誤", mode)
 
-        raw = self.session.get(url, verify=False)
-        soup = BeautifulSoup(raw.text, "lxml")
-
         try:
+            raw = self._safe_request("GET", url)
+            soup = BeautifulSoup(raw.text, "lxml")
             article = {}
+            meta = soup.select(".article-meta-value")
+            if len(meta) < 4:
+                return None
+            
+            article["Author"] = meta[0].text.strip().split(" ")[0]
+            article["Title"] = meta[2].text.strip()
+            article["Date"] = meta[3].text.strip().strip(" []")
 
-            # 取得文章作者與文章標題
-            article["Author"] = (
-                soup.select(".article-meta-value")[0].contents[0].split(" ")[0]
-            )
-            article["Title"] = soup.select(".article-meta-value")[2].contents[0]
+            content_div = soup.select_one("#main-content")
+            if content_div:
+                article["Content"] = content_div.get_text(separator="\n", strip=True)
+            else:
+                article["Content"] = ""
 
-            # 取得內文
-            content = ""
-            for tag in soup.select("#main-content")[0]:
-                if type(tag) is NavigableString and tag != "\n":
-                    content += tag
-                    break
-            article["Content"] = content
-
-            # 處理回文資訊
-            upvote = 0
-            downvote = 0
-            novote = 0
+            upvote, downvote, novote = 0, 0, 0
             response_list = []
-
             for response_struct in soup.select(".push"):
-
-                # 跳脫「檔案過大！部分文章無法顯示」的 push class
                 if "warning-box" not in response_struct["class"]:
+                    try:
+                        content = response_struct.select_one(".push-content").text.strip()[1:]
+                        vote = response_struct.select_one(".push-tag").text.strip()[0]
+                        user = response_struct.select_one(".push-userid").text.strip()
+                        response_dic = {"Content": content, "Vote": vote, "User": user}
 
-                    response_dic = {}
-
-                    # 根據不同的mode去採集response
-                    if mode == "all":
-                        response_dic["Content"] = response_struct.select(
-                            ".push-content"
-                        )[0].contents[0][1:]
-                        response_dic["Vote"] = response_struct.select(".push-tag")[
-                            0
-                        ].contents[0][0]
-                        response_dic["User"] = response_struct.select(".push-userid")[
-                            0
-                        ].contents[0]
-                        response_list.append(response_dic)
-
-                        if response_dic["Vote"] == "推":
-                            upvote += 1
-                        elif response_dic["Vote"] == "噓":
-                            downvote += 1
-                        else:
-                            novote += 1
-                    else:
-                        response_dic["Content"] = response_struct.select(
-                            ".push-content"
-                        )[0].contents[0][1:]
-                        response_dic["Vote"] = response_struct.select(".push-tag")[
-                            0
-                        ].contents[0][0]
-                        response_dic["User"] = response_struct.select(".push-userid")[
-                            0
-                        ].contents[0]
-
-                        if response_dic["Vote"] == mode:
+                        if mode_tag == "all" or vote == mode_tag:
                             response_list.append(response_dic)
-
-                            if mode == "推":
-                                upvote += 1
-                            elif mode == "噓":
-                                downvote += 1
-                            else:
-                                novote += 1
+                            if vote == "推": upvote += 1
+                            elif vote == "噓": downvote += 1
+                            else: novote += 1
+                    except:
+                        continue
 
             article["Responses"] = response_list
             article["UpVote"] = upvote
             article["DownVote"] = downvote
             article["NoVote"] = novote
-
+            return article
         except Exception as e:
-            print(e)
-            print("在分析 %s 時出現錯誤" % url)
-
-        return article
+            print(f"Error parsing {url}: {e}")
+            return None
 
     def output(self, filename, data):
-        """爬取完的資料寫到json文件
-        Args:
-            filename: json檔的文件路徑
-            data: 爬取完的資料
-        """
-
         try:
-            with open(
-                f"{filename}.json",
-                "wb+",
-            ) as op:
-                op.write(json.dumps(data, indent=4, ensure_ascii=False).encode("utf-8"))
-                print("爬取完成~", filename + ".json", "輸出成功！")
+            with open(f"{filename}.json", "w", encoding="utf-8") as op:
+                json.dump(data, op, indent=4, ensure_ascii=False)
+                print(f"成功輸出 {filename}.json")
         except Exception as err:
-            print(filename + ".json", "輸出失敗 :(")
-            print("error message:", err)
+            print(f"輸出失敗 {filename}.json: {err}")
 
-    def crawl(self, board="Gossiping", mode="all", start=1, end=2, sleep_time=0.5):
-        """爬取資料主要接口
-        Args:
-            board: 欲爬取的看版名稱
-            mode: 欲爬取回文的模式。全部(all)、推文(up)、噓文(down)、純回文(normal)
-            start: 從哪一頁開始爬取
-            end: 爬取到哪一頁停止
-            sleep_time: sleep間隔時間
-        """
+    def crawl_by_date(self, board="Gossiping", target_date="2025-01-01", sleep_time=1.0, max_workers=4):
+        target_dt = datetime.strptime(target_date, "%Y-%m-%d")
+        page_idx = 1
+        output_dir = f"data_{board}_2025"
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
 
-        crawl_range = range(start, end)
-
-        for page in self.pages(board, crawl_range):
-            filename = board + str(start) + ".json"
-            if os.path.exists(filename):
-                print(f"{filename} 已存在，跳過此頁。")
-                start += 1
+        while True:
+            page_url = f"{self.root}{board}/index{page_idx}.html" if page_idx > 1 else f"{self.root}{board}/index.html"
+            print(f"正在平行爬取第 {page_idx} 頁: {page_url}")
+            try:
+                urls = list(self.articles(page_url))
+            except Exception as e:
+                print(f"頁面 {page_idx} 索引爬取失敗: {e}")
+                time.sleep(5)
                 continue
-            res = []
 
-            for article in self.articles(page):
-                res.append(self.parse_article(article, mode))
-                time.sleep(sleep_time)
+            if not urls:
+                print("沒有發現文章，停止爬取。")
+                break
+            
+            page_data = []
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_url = {executor.submit(self.parse_article, url): url for url in urls}
+                for future in as_completed(future_to_url):
+                    art = future.result()
+                    if art:
+                        page_data.append(art)
+            
+            if page_data:
+                dates = []
+                for a in page_data:
+                    try:
+                        # PTT Date format: "Sat Sep 24 14:44:19 2005"
+                        dates.append(datetime.strptime(a["Date"], "%a %b %d %H:%M:%S %Y"))
+                    except: pass
+                
+                if dates and min(dates) < target_dt:
+                    print(f"發現日期已早於 {target_date}，完成本頁後停止爬取。")
+                    self.output(f"{output_dir}/{board}_{page_idx}", page_data)
+                    return
 
-            print("已經完成 %s 頁面第 %d 頁的爬取" % (board, start))
-            self.output(board + str(start), res)
-
-            start += 1
-
+            self.output(f"{output_dir}/{board}_{page_idx}", page_data)
+            page_idx += 1
+            time.sleep(sleep_time)
 
 if __name__ == "__main__":
     main()

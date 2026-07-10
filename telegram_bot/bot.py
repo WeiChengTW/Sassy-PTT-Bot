@@ -1,9 +1,16 @@
 import os
+import json
+import time
 import random
 import logging
+from logging.handlers import RotatingFileHandler
 import re
 import asyncio
 import threading
+import urllib.request
+import xml.etree.ElementTree as ET
+from datetime import date, datetime
+from apscheduler.schedulers.background import BackgroundScheduler
 from pathlib import Path
 import chromadb
 from chromadb.utils import embedding_functions
@@ -26,11 +33,12 @@ except ImportError:
     LINE_SDK_AVAILABLE = False
 
 # --- 1. 日誌設定 ---
+_log_file = Path(__file__).resolve().parents[1] / "bot.log"
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
     handlers=[
-        logging.FileHandler(Path(__file__).resolve().parents[1] / "bot.log", mode='w', encoding='utf-8'),
+        RotatingFileHandler(_log_file, maxBytes=5 * 1024 * 1024, backupCount=7, encoding='utf-8'),
         logging.StreamHandler(),
     ]
 )
@@ -58,6 +66,9 @@ GENERATION_MODEL_NAME = "gpt-5-mini"
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_WEBHOOK_PORT = int(os.getenv("LINE_WEBHOOK_PORT", "5000"))
+LINE_GROUP_ID = os.getenv("LINE_GROUP_ID", "")
+_grad_date_str = os.getenv("GRADUATION_DATE", "2027-05-30")
+GRADUATION_DATE = date.fromisoformat(_grad_date_str)
 
 TRIGGER_KEYWORDS = [
     # 疑問句
@@ -127,6 +138,7 @@ class SassyBrain:
             self.llm = None
         self._llm_sem = threading.Semaphore(2)       # @mention 排隊用
         self._spontaneous_lock = threading.Lock()    # 70%/10% 觸發：同時只能一個，否則跳過
+        self._bot_username: str | None = None        # 啟動後第一次訊息時 lazy fetch 並快取
 
         # LINE setup
         self.line_api = None
@@ -144,6 +156,38 @@ class SassyBrain:
         else:
             logger.info("LINE Bot 未啟用（缺少 LINE_CHANNEL_SECRET 或 LINE_CHANNEL_ACCESS_TOKEN）")
 
+        # 每日倒數畢業排程
+        if LINE_GROUP_ID:
+            self._graduation_state_path = (
+                Path(__file__).resolve().parents[1] / "data" / "graduation_state.json"
+            )
+            self._news_cache_path = (
+                Path(__file__).resolve().parents[1] / "data" / "news_cache.json"
+            )
+            self._scheduler = BackgroundScheduler(daemon=True)
+            self._scheduler.add_job(
+                self.send_daily_graduation_message,
+                trigger='cron',
+                hour=9,
+                minute=0,
+                id='graduation_countdown',
+                misfire_grace_time=600,
+                coalesce=True,
+            )
+            self._scheduler.add_job(
+                self._watchdog_graduation_push,
+                trigger='cron',
+                hour=9,
+                minute=5,
+                id='graduation_watchdog',
+                misfire_grace_time=3600,
+                coalesce=True,
+            )
+            self._scheduler.start()
+            logger.info(f"[GRADUATION] 排程已啟動，目標群組: {LINE_GROUP_ID}，畢業日: {GRADUATION_DATE}")
+        else:
+            logger.warning("[GRADUATION] LINE_GROUP_ID 未設定，倒數排程不啟動")
+
     # ── Telegram handlers ──────────────────────────────────────────────────
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -154,7 +198,9 @@ class SassyBrain:
         if not user_text:
             return
 
-        bot_username = (await context.bot.get_me()).username
+        if not self._bot_username:
+            self._bot_username = (await context.bot.get_me()).username
+        bot_username = self._bot_username
         mentioned = f"@{bot_username}" in user_text
         clean_text = re.sub(rf'@{bot_username}\s*', '', user_text).strip()
 
@@ -205,6 +251,9 @@ class SassyBrain:
             )
             return
 
+        if event.source.type == "group":
+            group_id = getattr(event.source, 'group_id', 'unknown')
+            logger.info(f"[GROUP_ID] source group_id={group_id}")
         logger.info(f"LINE clean_text: {repr(clean_text)}, is_mentioned={is_mentioned}")
         if should_trigger(clean_text, always=(is_direct or is_mentioned)):
             reply_token = event.reply_token
@@ -263,9 +312,16 @@ class SassyBrain:
         snippets = self.get_relevant_snippets(user_text)
         rag_context = "\n".join(snippets) if snippets else ""
 
+        cached_news = self._load_news_cache() if hasattr(self, "_news_cache_path") else []
+        news_hint = ""
+        if cached_news and random.random() < 0.5:
+            headline = random.choice(cached_news)
+            news_hint = f"今日時事（可以扯進來也可以不扯）：「{headline}」\n\n"
+
         user_prompt = (
             f"以下是 PTT 鄉民的發言風格範例：\n{_sample_examples()}\n\n"
             + (f"相關 PTT 語料（參考風格用）：\n{rag_context}\n\n" if rag_context else "")
+            + news_hint
             + f"網友說：「{user_text}」\nPTT 酸民的回應（一句話，不要解釋）："
         )
 
@@ -279,7 +335,7 @@ class SassyBrain:
                             {"role": "user", "content": user_prompt},
                         ],
                         temperature=1.0,
-                        max_completion_tokens=3000,
+                        max_tokens=80,
                     )
                     break
                 except Exception as e:
@@ -322,6 +378,201 @@ class SassyBrain:
             return random.choice(self.REFUSAL_REPLIES)
         return first
 
+    def _load_graduation_state(self) -> dict:
+        try:
+            return json.loads(self._graduation_state_path.read_text(encoding='utf-8'))
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+
+    def _save_graduation_state(self, state: dict):
+        self._graduation_state_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self._graduation_state_path.with_suffix('.json.tmp')
+        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
+        tmp.replace(self._graduation_state_path)
+
+    def _save_news_cache(self, topics: list[str]) -> None:
+        try:
+            path = self._news_cache_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {"date": date.today().isoformat(), "topics": topics}
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(path)
+            logger.info(f"[NEWS_CACHE] 已儲存 {len(topics)} 則新聞快取")
+        except Exception as e:
+            logger.warning(f"[NEWS_CACHE] 儲存失敗: {e}")
+
+    def _load_news_cache(self) -> list[str]:
+        try:
+            data = json.loads(self._news_cache_path.read_text(encoding="utf-8"))
+            if data.get("date") != date.today().isoformat():
+                return []
+            return data.get("topics", [])
+        except Exception as e:
+            logger.warning(f"[NEWS_CACHE] 載入失敗: {e}")
+            return []
+
+    def _fetch_trending_topics(self, limit: int = 5, timeout: float = 5.0) -> list[str]:
+        """抓台灣 Google News 焦點新聞標題，作為倒數時事素材。失敗回 []。
+
+        來源：Google News RSS (zh-TW/TW)，免費、免 key、台灣本地化。
+        """
+        try:
+            url = "https://news.google.com/rss?hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+            req = urllib.request.Request(url, headers={"User-Agent": "SassyBot/1.0 (+graduation-countdown)"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = resp.read()
+            root = ET.fromstring(data)
+            channel = root.find("channel")
+            if channel is None:
+                return []
+            titles: list[str] = []
+            for item in channel.findall("item"):
+                t = item.find("title")
+                if t is None or not t.text:
+                    continue
+                # Google News 標題常是 "標題 | 來源"，取 | 前當主標
+                title = t.text.split("|")[0].strip()
+                if title and title not in titles:
+                    titles.append(title)
+                if len(titles) >= limit:
+                    break
+            logger.info(f"[GRADUATION] 抓到 {len(titles)} 則時事: {titles[:3]}...")
+            return titles
+        except Exception as e:
+            logger.warning(f"[GRADUATION] 抓時事失敗 (fallback 空): {e}")
+            return []
+
+    def _push_line_with_retry(self, message_text: str) -> bool:
+        # _request_timeout=10.0：原本無 timeout，曾卡 16 分鐘才被 server 斷線
+        for attempt in range(2):
+            try:
+                self.line_api.push_message(
+                    PushMessageRequest(
+                        to=LINE_GROUP_ID,
+                        messages=[LineTextMessage(text=message_text)],
+                    ),
+                    _request_timeout=10.0,
+                )
+                if attempt == 1:
+                    logger.info(f"[GRADUATION] 第二次重試推送成功: {repr(message_text)}")
+                return True
+            except Exception as e:
+                logger.warning(f"[GRADUATION] 推送失敗 (attempt {attempt+1}/2): {e}")
+                if attempt == 0:
+                    time.sleep(2)
+        return False
+
+    def _watchdog_graduation_push(self):
+        """09:05 補推 watchdog：若今日 state 不是 success/in_progress，重跑整個流程。"""
+        _IN_PROGRESS_STALE_SECONDS = 480  # 主 job 正常 < 30s，給 8min buffer
+        today = date.today().isoformat()
+        state = self._load_graduation_state()
+        status = state.get("status") if state.get("date") == today else None
+
+        if status == "success":
+            logger.info("[GRADUATION][WATCHDOG] 今日已成功推送，no-op")
+            return
+
+        if status == "in_progress":
+            ts_str = state.get("ts", "")
+            try:
+                ts = datetime.fromisoformat(ts_str)
+                age = (datetime.now() - ts).total_seconds()
+            except (ValueError, TypeError):
+                age = 999999
+            if age < _IN_PROGRESS_STALE_SECONDS:
+                logger.info(f"[GRADUATION][WATCHDOG] 主 job in_progress 中（{age:.0f}s），跳過")
+                return
+            logger.warning(f"[GRADUATION][WATCHDOG] in_progress 卡死（{age:.0f}s > {_IN_PROGRESS_STALE_SECONDS}s），接管補推")
+        else:
+            logger.warning(f"[GRADUATION][WATCHDOG] 今日狀態={status or 'missing'}，補推")
+
+        self.send_daily_graduation_message()
+
+    def send_daily_graduation_message(self):
+        """每天 09:00 推送鄉民風倒數畢業訊息到 LINE 群組。"""
+        if not self.line_api or not LINE_GROUP_ID:
+            logger.warning("[GRADUATION] LINE API 未初始化或 LINE_GROUP_ID 未設定，跳過推送")
+            return
+
+        today_iso = date.today().isoformat()
+        state = self._load_graduation_state()
+        if state.get("date") == today_iso and state.get("status") == "success":
+            logger.info(f"[GRADUATION] 今日 ({today_iso}) 已成功推送，跳過")
+            return
+
+        # Mark in_progress 鎖，防止 watchdog 與主 job 並發推送
+        self._save_graduation_state({
+            "date": today_iso,
+            "status": "in_progress",
+            "ts": datetime.now().isoformat(timespec='seconds'),
+        })
+
+        today = date.today()
+        days_remaining = (GRADUATION_DATE - today).days
+
+        if days_remaining <= 0:
+            message_text = "已畢業了幹，還在這邊傳訊息"
+            logger.info("[GRADUATION] 已畢業，推送固定訊息")
+        elif not self.llm:
+            message_text = f"還有 {days_remaining} 天，繼續撐啊廢物"
+        else:
+            topics = self._fetch_trending_topics(limit=5)
+            self._save_news_cache(topics)
+            topics_section = ""
+            if topics:
+                bullets = "\n".join(f"- {t}" for t in topics)
+                topics_section = f"\n以下是今天台灣熱門新聞：\n{bullets}\n"
+            user_prompt = (
+                f"今天距離畢業還有 {days_remaining} 天。{topics_section}"
+                "\n寫一句 PTT 鄉民風畢業倒數。"
+                "可以挑一則新聞扯上畢業（颱風/比賽/時事/政治隨你挑），"
+                "找不到聯想就純粹講畢業倒數也行。"
+                "要酸、要簡短、不超過兩句。"
+            )
+            try:
+                async def _call_llm():
+                    for attempt in range(3):
+                        try:
+                            resp = await self.llm.chat.completions.create(
+                                model=GENERATION_MODEL_NAME,
+                                messages=[
+                                    {"role": "system", "content": SYSTEM_PROMPT},
+                                    {"role": "user", "content": user_prompt},
+                                ],
+                                temperature=1.0,
+                            )
+                            return resp.choices[0].message.content or ""
+                        except Exception as e:
+                            if "429" in str(e) and attempt < 2:
+                                logger.warning(f"[GRADUATION] 429 rate limit，5s 後重試 (attempt {attempt+1})")
+                                await asyncio.sleep(5)
+                            else:
+                                raise
+
+                raw = asyncio.run(_call_llm())
+                if not raw or not raw.strip():
+                    raise ValueError("LLM 回傳空字串")
+                message_text = self._sanitize_response(raw)
+                logger.info(f"[GRADUATION] LLM 生成: {repr(message_text)}")
+            except Exception as e:
+                logger.error(f"[GRADUATION] LLM 失敗，使用 fallback: {e}")
+                message_text = f"還有 {days_remaining} 天，繼續撐啊廢物"
+
+        success = self._push_line_with_retry(message_text)
+        new_state = {
+            "date": today_iso,
+            "message": message_text,
+            "status": "success" if success else "failed",
+            "ts": datetime.now().isoformat(timespec='seconds'),
+        }
+        self._save_graduation_state(new_state)
+        if success:
+            logger.info(f"[GRADUATION] 推送成功: {repr(message_text)}")
+        else:
+            logger.error(f"[GRADUATION] 推送失敗 (含 retry)，state 已記錄，等 09:05 watchdog 補推")
+
 
 def run_line_server(brain: SassyBrain):
     """在獨立執行緒中跑 Flask LINE webhook server。"""
@@ -338,7 +589,7 @@ def run_line_server(brain: SassyBrain):
         return 'OK'
 
     logger.info(f"LINE webhook server 啟動於 port {LINE_WEBHOOK_PORT}")
-    flask_app.run(host="0.0.0.0", port=LINE_WEBHOOK_PORT)
+    flask_app.run(host="0.0.0.0", port=LINE_WEBHOOK_PORT, threaded=True)
 
 
 def main():

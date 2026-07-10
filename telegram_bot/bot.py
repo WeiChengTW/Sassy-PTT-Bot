@@ -139,6 +139,7 @@ class SassyBrain:
         self._llm_sem = threading.Semaphore(2)       # @mention 排隊用
         self._spontaneous_lock = threading.Lock()    # 70%/10% 觸發：同時只能一個，否則跳過
         self._bot_username: str | None = None        # 啟動後第一次訊息時 lazy fetch 並快取
+        self._chat_histories: dict[str, list[tuple[str, str]]] = {}  # chat_id → [(user, bot), ...]
 
         # LINE setup
         self.line_api = None
@@ -209,7 +210,8 @@ class SassyBrain:
             return
 
         if should_trigger(clean_text, always=mentioned):
-            response = await self.generate_response(clean_text)
+            chat_id = str(update.effective_chat.id)
+            response = await self.generate_response(clean_text, chat_id=chat_id)
             await update.message.reply_text(response)
 
     # ── LINE handlers ──────────────────────────────────────────────────────
@@ -258,6 +260,12 @@ class SassyBrain:
         if should_trigger(clean_text, always=(is_direct or is_mentioned)):
             reply_token = event.reply_token
             quote_token = event.message.quote_token
+            # chat_id：群組用 group_id，私訊用 user_id，讓歷史不同 chat 不互通
+            line_chat_id = (
+                getattr(event.source, 'group_id', None)
+                or getattr(event.source, 'user_id', None)
+                or 'line_unknown'
+            )
 
             def do_reply(response):
                 try:
@@ -273,17 +281,17 @@ class SassyBrain:
                 # @mention / 私訊：排隊一定回（reply token 30 秒內有效）
                 def reply_mention():
                     with self._llm_sem:
-                        response = asyncio.run(self.generate_response(clean_text))
+                        response = asyncio.run(self.generate_response(clean_text, chat_id=line_chat_id))
                     do_reply(response)
                 threading.Thread(target=reply_mention, daemon=True).start()
             else:
-                # 70%/10% 觸發：搶不到 lock 就跳過
+                # 30%/10% 觸發：搶不到 lock 就跳過
                 def reply_spontaneous():
                     if not self._spontaneous_lock.acquire(blocking=False):
                         logger.info("spontaneous 觸發跳過（已有處理中）")
                         return
                     try:
-                        response = asyncio.run(self.generate_response(clean_text))
+                        response = asyncio.run(self.generate_response(clean_text, chat_id=line_chat_id))
                         do_reply(response)
                     finally:
                         self._spontaneous_lock.release()
@@ -302,7 +310,7 @@ class SassyBrain:
             logger.error(f"檢索失敗: {e}")
             return []
 
-    async def generate_response(self, user_text):
+    async def generate_response(self, user_text, chat_id: str | None = None):
         if not self.llm:
             return "笑死，連 Key 都沒有，你比我還窮。"
 
@@ -325,15 +333,20 @@ class SassyBrain:
             + f"網友說：「{user_text}」\nPTT 酸民的回應（一句話，不要解釋）："
         )
 
+        # 建構訊息列表，注入最近 3 輪對話歷史
+        messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        if chat_id:
+            for hist_user, hist_bot in self._chat_histories.get(chat_id, [])[-3:]:
+                messages.append({"role": "user", "content": hist_user})
+                messages.append({"role": "assistant", "content": hist_bot})
+        messages.append({"role": "user", "content": user_prompt})
+
         try:
             for attempt in range(3):
                 try:
                     resp = await self.llm.chat.completions.create(
                         model=GENERATION_MODEL_NAME,
-                        messages=[
-                            {"role": "system", "content": SYSTEM_PROMPT},
-                            {"role": "user", "content": user_prompt},
-                        ],
+                        messages=messages,
                         temperature=1.0,
                         max_tokens=80,
                     )
@@ -349,7 +362,14 @@ class SassyBrain:
             raw_text = choice.message.content or ""
             logger.info(f"回應時間: {elapsed:.1f}s")
             logger.info(f"模型原始輸出: {repr(raw_text)} | finish_reason: {choice.finish_reason}")
-            return self._sanitize_response(raw_text)
+            result = self._sanitize_response(raw_text)
+            # 儲存到對話歷史（最多保留 5 輪）
+            if chat_id:
+                history = self._chat_histories.setdefault(chat_id, [])
+                history.append((user_text, result))
+                if len(history) > 5:
+                    self._chat_histories[chat_id] = history[-5:]
+            return result
         except Exception as e:
             logger.error(f"生成失敗: {e}")
             return "懶得理你，自己想。"

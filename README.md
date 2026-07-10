@@ -15,6 +15,7 @@
 | 嵌入模型 | `sentence-transformers/all-MiniLM-L6-v2` |
 | Telegram 框架 | `python-telegram-bot`（非同步） |
 | LINE 框架 | `line-bot-sdk` v3 + Flask webhook |
+| 排程 | APScheduler（每日倒數、每週爬蟲） |
 
 ### 運作流程
 
@@ -43,18 +44,27 @@ Bot 不會對每條訊息回應，模擬真實鄉民的「隨緣」特性：
 - System prompt 以創意角色扮演框架設定 PTT 鄉民人設：極短、犀利、充滿台灣網路黑話。
 - 輸出經後處理，移除 PTT 標記符號，只取第一行；若 LLM 觸發安全過濾，自動替換為人設台詞。
 - **LINE**：回應時自動引用（quote reply）觸發的那則訊息，群組中一眼看出 bot 在回哪句話。
+- **多輪對話**：每個群組/私訊維護最近 5 輪對話記憶，bot 能接話茬。
+
+**步驟 D：自動排程**
+
+- **每日 09:00**：推播畢業倒數天數 + 當日 PTT 熱門時事（快取至 `data/news_cache.json`，供當日嘴砲使用）
+- **每週日 03:00**：自動爬取最新 PTT 八卦板文章並重建 ChromaDB 索引，語料持續更新
 
 ## 專案結構
 
 ```
-nlp_final_project/
+Sassy-PTT-Bot/
 ├── telegram_bot/
 │   └── bot.py           # 機器人主程式
 ├── indexer.py           # 將 PTT 語料建立 ChromaDB 索引
-├── corpus.py            # 語料處理邏輯
+├── data/
+│   └── news_cache.json  # 每日新聞快取（自動產生）
 ├── PTT-Crawler-master/
+│   ├── Crawler.py       # PTT 爬蟲
 │   └── chroma_db/       # 向量資料庫（不含於 repo）
-└── requirements.txt
+├── requirements.txt
+└── bot.log              # 滾動日誌（5MB × 7 份）
 ```
 
 ## 從零開始準備語料
@@ -94,6 +104,7 @@ python indexer.py
 預設最多索引 100,000 筆語料（可在 `indexer.py` 的 `MAX_DOCUMENTS` 調整）。
 
 > 語料越多、涵蓋話題越廣，RAG 檢索效果越好。建議至少準備 **5 萬筆以上**的推文。
+> 啟動後每週日 03:00 會自動增量爬取並重建索引。
 
 ---
 
@@ -102,10 +113,11 @@ python indexer.py
 ### 環境需求
 
 - Python 3.11+
-- 套件：`python-telegram-bot`, `chromadb`, `sentence-transformers`, `openai`, `python-dotenv`, `line-bot-sdk`, `flask`
 
 ```bash
-pip install python-telegram-bot chromadb sentence-transformers openai python-dotenv line-bot-sdk flask
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 ```
 
 ### 環境變數
@@ -123,6 +135,10 @@ CGU_LLM_API_KEY=your_api_key
 LINE_CHANNEL_SECRET=your_line_channel_secret
 LINE_CHANNEL_ACCESS_TOKEN=your_line_channel_access_token
 LINE_WEBHOOK_PORT=5000
+
+# 畢業倒數（選填）
+GRADUATION_DATE=2027-05-22
+GRADUATION_GROUP_ID=your_line_group_id
 ```
 
 > LINE Bot 需要公開的 HTTPS 端點才能接收 webhook。本機開發可用 [ngrok](https://ngrok.com/)：
@@ -143,3 +159,5 @@ python telegram_bot/bot.py
 Telegram 機器人已啟動 (gpt-5-mini 模式)。
 LINE webhook server 啟動於 port 5000   # 若有設定 LINE 環境變數
 ```
+
+日誌寫入 `bot.log`（RotatingFileHandler，5MB × 7 份，重啟不清除）。

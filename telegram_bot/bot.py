@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import time
 import random
@@ -7,9 +8,10 @@ from logging.handlers import RotatingFileHandler
 import re
 import asyncio
 import threading
+import subprocess
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from pathlib import Path
 import chromadb
@@ -181,6 +183,16 @@ class SassyBrain:
                 hour=9,
                 minute=5,
                 id='graduation_watchdog',
+                misfire_grace_time=3600,
+                coalesce=True,
+            )
+            self._scheduler.add_job(
+                self._run_weekly_crawl_and_index,
+                trigger='cron',
+                day_of_week='sun',
+                hour=3,
+                minute=0,
+                id='weekly_ptt_update',
                 misfire_grace_time=3600,
                 coalesce=True,
             )
@@ -462,6 +474,41 @@ class SassyBrain:
         except Exception as e:
             logger.warning(f"[GRADUATION] 抓時事失敗 (fallback 空): {e}")
             return []
+
+    def _run_weekly_crawl_and_index(self):
+        """每週日凌晨 3:00 自動爬取近 8 天 PTT 新文章並重建向量索引。"""
+        project_root = Path(__file__).resolve().parents[1]
+        crawler_dir = project_root / "PTT-Crawler-master"
+        indexer_script = project_root / "indexer.py"
+        target_date = (date.today() - timedelta(days=8)).isoformat()
+
+        logger.info(f"[WEEKLY_CRAWL] 開始爬取 PTT（target_date={target_date}）...")
+        try:
+            crawl_code = (
+                f"import sys; sys.path.insert(0, r'{crawler_dir}'); "
+                f"from Crawler import PttCrawler; "
+                f"PttCrawler().crawl_by_date(board='Gossiping', target_date='{target_date}')"
+            )
+            subprocess.run(
+                [sys.executable, "-c", crawl_code],
+                cwd=str(crawler_dir),
+                check=True,
+                timeout=3600,
+            )
+            logger.info("[WEEKLY_CRAWL] 爬蟲完成，開始重建向量索引...")
+            subprocess.run(
+                [sys.executable, str(indexer_script)],
+                cwd=str(project_root),
+                check=True,
+                timeout=7200,
+            )
+            logger.info("[WEEKLY_CRAWL] 索引重建完成。")
+        except subprocess.TimeoutExpired:
+            logger.error("[WEEKLY_CRAWL] 超時，本週跳過。")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"[WEEKLY_CRAWL] 失敗 (returncode={e.returncode}): {e}")
+        except Exception as e:
+            logger.error(f"[WEEKLY_CRAWL] 未預期錯誤: {e}")
 
     def _push_line_with_retry(self, message_text: str) -> bool:
         # _request_timeout=10.0：原本無 timeout，曾卡 16 分鐘才被 server 斷線

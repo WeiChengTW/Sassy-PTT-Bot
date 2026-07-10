@@ -2,13 +2,15 @@ import os
 import json
 import logging
 import random
+from pathlib import Path
 import chromadb
 from sentence_transformers import SentenceTransformer
 from chromadb.utils import embedding_functions
 
 # --- Configuration ---
-DATA_DIR = "/home/william/projects/nlp_final_project/PTT-Crawler-master/data_Gossiping_2025"
-DB_PATH = "/home/william/projects/nlp_final_project/PTT-Crawler-master/chroma_db"
+_PROJECT_ROOT = Path(__file__).resolve().parent
+DATA_DIR = str(_PROJECT_ROOT / "PTT-Crawler-master" / "data_Gossiping_2025")
+DB_PATH = str(_PROJECT_ROOT / "PTT-Crawler-master" / "chroma_db")
 MODEL_NAME = "all-MiniLM-L6-v2"
 MAX_DOCUMENTS = 100000  # Cap for performance on old desktop
 

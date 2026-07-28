@@ -41,7 +41,6 @@ logging.basicConfig(
     level=logging.INFO,
     handlers=[
         RotatingFileHandler(_log_file, maxBytes=5 * 1024 * 1024, backupCount=7, encoding='utf-8'),
-        logging.StreamHandler(),
     ]
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -360,7 +359,7 @@ class SassyBrain:
                         model=GENERATION_MODEL_NAME,
                         messages=messages,
                         temperature=1.0,
-                        max_tokens=80,
+                        max_completion_tokens=2000,
                     )
                     break
                 except Exception as e:
@@ -441,7 +440,7 @@ class SassyBrain:
                 return []
             return data.get("topics", [])
         except Exception as e:
-            logger.warning(f"[NEWS_CACHE] 載入失敗: {e}")
+            logger.debug(f"[NEWS_CACHE] 載入失敗: {e}")
             return []
 
     def _fetch_trending_topics(self, limit: int = 5, timeout: float = 5.0) -> list[str]:
@@ -591,11 +590,16 @@ class SassyBrain:
             if topics:
                 bullets = "\n".join(f"- {t}" for t in topics)
                 topics_section = f"\n以下是今天台灣熱門新聞：\n{bullets}\n"
+            yesterday_hint = ""
+            # state still holds yesterday's loaded value (before we wrote in_progress)
+            yesterday_msg = state.get("message", "") if state.get("date") != today_iso else ""
+            if yesterday_msg:
+                yesterday_hint = f"\n（昨天的訊息是：「{yesterday_msg}」，今天請換個不同的新聞角度或主題，不要重複昨天的梗）\n"
             user_prompt = (
-                f"今天距離畢業還有 {days_remaining} 天。{topics_section}"
+                f"今天距離畢業還有 {days_remaining} 天。{topics_section}{yesterday_hint}"
                 "\n寫一句 PTT 鄉民風畢業倒數。"
-                "可以挑一則新聞扯上畢業（颱風/比賽/時事/政治隨你挑），"
-                "找不到聯想就純粹講畢業倒數也行。"
+                "從新聞清單中挑一則扯上畢業，優先挑跟昨天不同主題的新聞。"
+                "找不到新聯想就純粹講畢業倒數也行。"
                 "要酸、要簡短、不超過兩句。"
             )
             try:
@@ -656,7 +660,7 @@ def run_line_server(brain: SassyBrain):
         return 'OK'
 
     logger.info(f"LINE webhook server 啟動於 port {LINE_WEBHOOK_PORT}")
-    flask_app.run(host="0.0.0.0", port=LINE_WEBHOOK_PORT, threaded=True)
+    flask_app.run(host="0.0.0.0", port=LINE_WEBHOOK_PORT, threaded=True, use_reloader=False)
 
 
 def main():

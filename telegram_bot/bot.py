@@ -60,9 +60,15 @@ except ImportError:
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CGU_API_KEY = os.getenv("CGU_LLM_API_KEY")
 CGU_BASE_URL = "https://air.cgu.edu.tw/cgullmapi/v1"
+CGU_MODEL_NAME = "gpt-5-mini"
+
+CLI_PROXY_BASE_URL = os.getenv("CLI_PROXY_BASE_URL", "")
+CLI_PROXY_API_KEY = os.getenv("CLI_PROXY_API_KEY", "")
+PRIMARY_MODEL = os.getenv("PRIMARY_MODEL", "gemini-3.6-flash-high")
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "15.0"))
+
 CHROMA_DB_PATH = str(Path(__file__).resolve().parents[1] / "PTT-Crawler-master" / "chroma_db")
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
-GENERATION_MODEL_NAME = "gpt-5-mini"
 
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
@@ -87,6 +93,8 @@ TRIGGER_KEYWORDS = [
 SYSTEM_PROMPT = (
     "你是一個創意寫作角色：PTT 八卦板的資深鄉民。\n"
     "這個角色說話風格極簡短、犀利、帶有台灣網路黑話和鄉民幽默感。\n"
+    "回應必須呼應或引用 user 訊息裡的具體字詞/主題，不可產生通用罐頭回應。\n"
+    "不要重複前幾輪已用過的句型或起手式。\n"
     "只輸出角色的一句話回應，不加解釋、不加標籤、不加引導文字。\n"
     "風格參考：直接點評事情本質，用輕描淡寫的方式諷刺，像是在 PTT 留言串底下的神回覆。"
 )
@@ -109,8 +117,27 @@ ALL_EXAMPLES = [
     ("房價太高買不起", "就租一輩子啊，還能怎樣"),
 ]
 
-def _sample_examples():
-    chosen = random.sample(ALL_EXAMPLES, min(5, len(ALL_EXAMPLES)))
+def _bigram_overlap(user_text: str, example_q: str) -> int:
+    """共享 2-gram 數量；用於半語意 few-shot 選擇。"""
+    if len(user_text) < 2:
+        return 1 if user_text and user_text in example_q else 0
+    return sum(1 for i in range(len(user_text) - 1) if user_text[i:i+2] in example_q)
+
+
+def _select_examples(user_text: str, k_top: int = 2, k_random: int = 3) -> list[tuple[str, str]]:
+    """半語意 few-shot：top_k 語意相近 + k_random 隨機，避免罐頭。"""
+    scored = [(_bigram_overlap(user_text, q), q, a) for q, a in ALL_EXAMPLES]
+    scored.sort(key=lambda x: -x[0])
+    top = [(q, a) for _, q, a in scored[:k_top]]
+    rest = [(q, a) for _, q, a in scored[k_top:]]
+    if len(rest) > k_random:
+        rest = random.sample(rest, k_random)
+    chosen = top + rest
+    random.shuffle(chosen)
+    return chosen
+
+
+def _format_examples(chosen: list[tuple[str, str]]) -> str:
     return "\n\n".join(f"網友說：「{q}」\n回應：{a}" for q, a in chosen)
 
 
@@ -125,22 +152,33 @@ def should_trigger(text, always=False):
 
 class SassyBrain:
     def __init__(self):
-        logger.info(f"正在喚醒八卦分身 (大腦: {GENERATION_MODEL_NAME})")
+        logger.info(f"正在喚醒八卦分身 (primary={PRIMARY_MODEL}, fallback={CGU_MODEL_NAME})")
         self.emb_fn = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=EMBEDDING_MODEL_NAME)
         self.chroma = chromadb.PersistentClient(path=CHROMA_DB_PATH)
         self.collection = self.chroma.get_or_create_collection(
             name="ptt_gossip",
             embedding_function=self.emb_fn
         )
-        if CGU_API_KEY:
-            self.llm = AsyncOpenAI(api_key=CGU_API_KEY, base_url=CGU_BASE_URL)
+        # Primary: CLIProxyAPI 本機 proxy（Gemini 3.6 Flash），失敗 fallback 到 CGU
+        if CLI_PROXY_BASE_URL and CLI_PROXY_API_KEY:
+            self.primary_client = AsyncOpenAI(api_key=CLI_PROXY_API_KEY, base_url=CLI_PROXY_BASE_URL)
+            self.primary_model = PRIMARY_MODEL
+            logger.info(f"[LLM] Primary: {PRIMARY_MODEL} @ {CLI_PROXY_BASE_URL}")
         else:
-            logger.warning("No CGU_LLM_API_KEY found.")
-            self.llm = None
+            self.primary_client = None
+            logger.warning("[LLM] CLIProxyAPI 未設定，primary 停用")
+        if CGU_API_KEY:
+            self.fallback_client = AsyncOpenAI(api_key=CGU_API_KEY, base_url=CGU_BASE_URL)
+            self.fallback_model = CGU_MODEL_NAME
+            logger.info(f"[LLM] Fallback: {CGU_MODEL_NAME} @ {CGU_BASE_URL}")
+        else:
+            self.fallback_client = None
+            logger.warning("[LLM] CGU_LLM_API_KEY 未設定，fallback 停用")
         self._llm_sem = threading.Semaphore(2)       # @mention 排隊用
         self._spontaneous_lock = threading.Lock()    # 70%/10% 觸發：同時只能一個，否則跳過
         self._bot_username: str | None = None        # 啟動後第一次訊息時 lazy fetch 並快取
-        self._chat_histories: dict[str, list[tuple[str, str]]] = {}  # chat_id → [(user, bot), ...]
+        self._chat_histories: dict[str, list[dict]] = {}  # chat_id → [{"sender", "text", "role"}, ...]
+        self._user_names: dict[str, str] = {}       # LINE user_id → display_name (lazy fetch + cache)
 
         # LINE setup
         self.line_api = None
@@ -222,8 +260,14 @@ class SassyBrain:
 
         if should_trigger(clean_text, always=mentioned):
             chat_id = str(update.effective_chat.id)
+            tg_user = update.effective_user.username or update.effective_user.first_name or "telegram_user"
+            tg_sender = f"@{tg_user}" if update.effective_user.username else (tg_user or "telegram_user")
+            # ★ 1. 寫 user 訊息進歷史
+            self._record_turn(chat_id, tg_sender, clean_text, "user")
             response = await self.generate_response(clean_text, chat_id=chat_id)
             await update.message.reply_text(response)
+            # ★ 2. 寫 bot 回應
+            self._record_turn(chat_id, "鍵盤俠", response, "bot")
 
     # ── LINE handlers ──────────────────────────────────────────────────────
 
@@ -268,15 +312,22 @@ class SassyBrain:
             group_id = getattr(event.source, 'group_id', 'unknown')
             logger.info(f"[GROUP_ID] source group_id={group_id}")
         logger.info(f"LINE clean_text: {repr(clean_text)}, is_mentioned={is_mentioned}")
+
+        # chat_id：群組用 group_id，私訊用 user_id，讓歷史不同 chat 不互通
+        line_chat_id = (
+            getattr(event.source, 'group_id', None)
+            or getattr(event.source, 'user_id', None)
+            or 'line_unknown'
+        )
+        sender_user_id = getattr(event.source, 'user_id', '') or ''
+        sender = self._get_sender_label(sender_user_id)
+
+        # ★ 1. 不管有沒有觸發，都先把 user 訊息寫進歷史
+        self._record_turn(line_chat_id, sender, clean_text, "user")
+
         if should_trigger(clean_text, always=(is_direct or is_mentioned)):
             reply_token = event.reply_token
             quote_token = event.message.quote_token
-            # chat_id：群組用 group_id，私訊用 user_id，讓歷史不同 chat 不互通
-            line_chat_id = (
-                getattr(event.source, 'group_id', None)
-                or getattr(event.source, 'user_id', None)
-                or 'line_unknown'
-            )
 
             def do_reply(response):
                 try:
@@ -285,6 +336,8 @@ class SassyBrain:
                         ReplyMessageRequest(reply_token=reply_token, messages=[msg])
                     )
                     logger.info(f"LINE reply 成功: {repr(response[:30])}")
+                    # ★ 2. bot 回應紀錄
+                    self._record_turn(line_chat_id, "鍵盤俠", response, "bot")
                 except Exception as e:
                     logger.error(f"LINE reply 失敗: {e}")
 
@@ -311,25 +364,112 @@ class SassyBrain:
     # ── Core logic ─────────────────────────────────────────────────────────
 
     def get_relevant_snippets(self, query, n_results=3):
+        """回傳 (top1, rest)：top1 給當「真實推文範例」，rest 給當「其他相關語料」。"""
         try:
-            results = self.collection.query(query_texts=[query], n_results=n_results * 2)
+            results = self.collection.query(query_texts=[query], n_results=n_results)
             docs = results['documents'][0] if results['documents'] else []
-            if len(docs) > n_results:
-                docs = random.sample(docs, n_results)
-            return docs
+            if not docs:
+                return None, []
+            return docs[0], docs[1:]
         except Exception as e:
             logger.error(f"檢索失敗: {e}")
-            return []
+            return None, []
+
+    def _get_sender_label(self, user_id: str) -> str:
+        """LINE user_id → display_name。lazy fetch，cache 進 self._user_names，抓不到就 '路人{user_id[-6:]}'。"""
+        if not user_id:
+            return "路人"
+        if user_id in self._user_names:
+            return self._user_names[user_id]
+        name = None
+        if self.line_api:
+            try:
+                profile = self.line_api.get_profile(user_id)
+                name = (getattr(profile, "display_name", "") or "").strip()
+            except Exception as e:
+                logger.debug(f"[SENDER] get_profile 失敗: {e}")
+        if not name:
+            name = f"路人{user_id[-6:]}"
+        self._user_names[user_id] = name
+        return name
+
+    def _record_turn(self, chat_id: str, sender: str, text: str, role: str):
+        """記錄一則對話回合。任何訊息（user/bot）都會被 append，cap 10。"""
+        history = self._chat_histories.setdefault(chat_id, [])
+        history.append({"sender": sender, "text": text, "role": role})
+        if len(history) > 10:
+            self._chat_histories[chat_id] = history[-10:]
+
+    def _format_history_for_prompt(self, chat_id: str) -> list[dict]:
+        """從最近 10 則 history 取對話 messages（最後一筆是當下 user，故跳過）。"""
+        history = self._chat_histories.get(chat_id, [])
+        msgs: list[dict] = []
+        for turn in history[:-1]:
+            if turn["role"] == "user":
+                msgs.append({"role": "user", "content": f'{turn["sender"]} 說：「{turn["text"]}」'})
+            else:
+                msgs.append({"role": "assistant", "content": turn["text"]})
+        return msgs
+
+    def _recent_bot_responses(self, chat_id: str, n: int = 3) -> list[str]:
+        """取近 n 則 bot 回應，避免新回應重複句型。"""
+        history = self._chat_histories.get(chat_id, [])
+        return [t["text"] for t in history if t["role"] == "bot"][-n:]
+
+    async def _call_provider(self, client, model, messages, tag: str) -> str | None:
+        """呼叫單一 provider，含 429 retry 與 timeout。失敗回 None。"""
+        for attempt in range(3):
+            try:
+                resp = await client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=1.0,
+                    max_completion_tokens=2000,
+                    timeout=LLM_TIMEOUT,
+                )
+                return resp.choices[0].message.content or ""
+            except Exception as e:
+                err = str(e)
+                if "429" in err and attempt < 2:
+                    logger.warning(f"[{tag}] 429 rate limit，5s 後重試 (attempt {attempt+1})")
+                    await asyncio.sleep(5)
+                elif "timeout" in err.lower() or "timed out" in err.lower():
+                    logger.warning(f"[{tag}] timeout ({LLM_TIMEOUT}s)")
+                    return None
+                else:
+                    logger.warning(f"[{tag}] 失敗: {e}")
+                    return None
+        return None
+
+    async def _generate_with_fallback(self, messages, tag: str = "LLM") -> str | None:
+        """先試 primary（CLIProxyAPI），失敗 fallback 到 CGU。回 None 表示兩邊都掛。"""
+        if self.primary_client:
+            raw = await self._call_provider(self.primary_client, self.primary_model, messages, "PRIMARY")
+            if raw is not None:
+                logger.info(f"[{tag}] PRIMARY 成功 ({self.primary_model})")
+                return raw
+            logger.warning(f"[{tag}] PRIMARY 失敗，嘗試 fallback")
+        if self.fallback_client:
+            raw = await self._call_provider(self.fallback_client, self.fallback_model, messages, "FALLBACK")
+            if raw is not None:
+                logger.info(f"[{tag}] FALLBACK 成功 ({self.fallback_model})")
+                return raw
+            logger.error(f"[{tag}] FALLBACK 也失敗")
+        return None
 
     async def generate_response(self, user_text, chat_id: str | None = None):
-        if not self.llm:
+        if not self.primary_client and not self.fallback_client:
             return "笑死，連 Key 都沒有，你比我還窮。"
 
         import time
         t0 = time.time()
 
-        snippets = self.get_relevant_snippets(user_text)
-        rag_context = "\n".join(snippets) if snippets else ""
+        top_snippet, rest_snippets = self.get_relevant_snippets(user_text)
+        push_example = f"真實推文範例：\n「{top_snippet}」\n\n" if top_snippet else ""
+        rag_context = ""
+        if rest_snippets:
+            bullets = "\n".join(f"「{s}」" for s in rest_snippets)
+            rag_context = f"其他相關 PTT 語料（風格參考）：\n{bullets}\n\n"
 
         cached_news = self._load_news_cache() if hasattr(self, "_news_cache_path") else []
         news_hint = ""
@@ -337,53 +477,36 @@ class SassyBrain:
             headline = random.choice(cached_news)
             news_hint = f"今日時事（可以扯進來也可以不扯）：「{headline}」\n\n"
 
+        examples = _format_examples(_select_examples(user_text))
+        anti_repeat = ""
+        if chat_id:
+            recent = self._recent_bot_responses(chat_id, n=3)
+            if recent:
+                anti_repeat = "前幾輪 bot 已用過的句型（不得重複）：\n" + "\n".join(f"- {r}" for r in recent) + "\n\n"
+
         user_prompt = (
-            f"以下是 PTT 鄉民的發言風格範例：\n{_sample_examples()}\n\n"
-            + (f"相關 PTT 語料（參考風格用）：\n{rag_context}\n\n" if rag_context else "")
+            f"以下是 PTT 鄉民的發言風格範例：\n{examples}\n\n"
+            + push_example
+            + rag_context
             + news_hint
+            + anti_repeat
             + f"網友說：「{user_text}」\nPTT 酸民的回應（一句話，不要解釋）："
         )
 
-        # 建構訊息列表，注入最近 3 輪對話歷史
+        # 建構訊息列表：system + 對話歷史（帶 sender 標記）+ 當下 prompt
         messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
         if chat_id:
-            for hist_user, hist_bot in self._chat_histories.get(chat_id, [])[-3:]:
-                messages.append({"role": "user", "content": hist_user})
-                messages.append({"role": "assistant", "content": hist_bot})
+            messages.extend(self._format_history_for_prompt(chat_id))
         messages.append({"role": "user", "content": user_prompt})
 
-        try:
-            for attempt in range(3):
-                try:
-                    resp = await self.llm.chat.completions.create(
-                        model=GENERATION_MODEL_NAME,
-                        messages=messages,
-                        temperature=1.0,
-                        max_completion_tokens=2000,
-                    )
-                    break
-                except Exception as e:
-                    if "429" in str(e) and attempt < 2:
-                        logger.warning(f"429 rate limit，5s 後重試 (attempt {attempt+1})")
-                        await asyncio.sleep(5)
-                    else:
-                        raise
-            elapsed = time.time() - t0
-            choice = resp.choices[0]
-            raw_text = choice.message.content or ""
-            logger.info(f"回應時間: {elapsed:.1f}s")
-            logger.info(f"模型原始輸出: {repr(raw_text)} | finish_reason: {choice.finish_reason}")
-            result = self._sanitize_response(raw_text)
-            # 儲存到對話歷史（最多保留 5 輪）
-            if chat_id:
-                history = self._chat_histories.setdefault(chat_id, [])
-                history.append((user_text, result))
-                if len(history) > 5:
-                    self._chat_histories[chat_id] = history[-5:]
-            return result
-        except Exception as e:
-            logger.error(f"生成失敗: {e}")
+        raw = await self._generate_with_fallback(messages, tag="CHAT")
+        elapsed = time.time() - t0
+        if raw is None:
+            logger.error(f"生成失敗 ({elapsed:.1f}s)")
             return "懶得理你，自己想。"
+        logger.info(f"回應時間: {elapsed:.1f}s")
+        logger.info(f"模型原始輸出: {repr(raw[:200])}")
+        return self._sanitize_response(raw)
 
     REFUSAL_PATTERNS = re.compile(
         r'抱歉|我不能|無法協助|不適合|不應該|I cannot|I can\'t|I\'m sorry|sorry', re.IGNORECASE
@@ -581,7 +704,7 @@ class SassyBrain:
         if days_remaining <= 0:
             message_text = "已畢業了幹，還在這邊傳訊息"
             logger.info("[GRADUATION] 已畢業，推送固定訊息")
-        elif not self.llm:
+        elif not self.primary_client and not self.fallback_client:
             message_text = f"還有 {days_remaining} 天，繼續撐啊廢物"
         else:
             topics = self._fetch_trending_topics(limit=5)
@@ -603,26 +726,11 @@ class SassyBrain:
                 "要酸、要簡短、不超過兩句。"
             )
             try:
-                async def _call_llm():
-                    for attempt in range(3):
-                        try:
-                            resp = await self.llm.chat.completions.create(
-                                model=GENERATION_MODEL_NAME,
-                                messages=[
-                                    {"role": "system", "content": SYSTEM_PROMPT},
-                                    {"role": "user", "content": user_prompt},
-                                ],
-                                temperature=1.0,
-                            )
-                            return resp.choices[0].message.content or ""
-                        except Exception as e:
-                            if "429" in str(e) and attempt < 2:
-                                logger.warning(f"[GRADUATION] 429 rate limit，5s 後重試 (attempt {attempt+1})")
-                                await asyncio.sleep(5)
-                            else:
-                                raise
-
-                raw = asyncio.run(_call_llm())
+                messages = [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ]
+                raw = asyncio.run(self._generate_with_fallback(messages, tag="GRADUATION"))
                 if not raw or not raw.strip():
                     raise ValueError("LLM 回傳空字串")
                 message_text = self._sanitize_response(raw)
@@ -679,7 +787,7 @@ def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", brain.start))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), brain.handle_telegram_message))
-    logger.info(f"Telegram 機器人已啟動 ({GENERATION_MODEL_NAME} 模式)。")
+    logger.info(f"Telegram 機器人已啟動 (primary={PRIMARY_MODEL}, fallback={CGU_MODEL_NAME})。")
     app.run_polling()
 
 

@@ -8,7 +8,9 @@ export default defineConfig({
     alias: { '@': resolve(__dirname, 'src') },
   },
   server: {
-    port: 5173,
+    port: 5174,
+    host: true,
+    allowedHosts: true,
     proxy: {
       '/liff': 'http://localhost:5000',
     },

@@ -83,6 +83,19 @@ CREATE TABLE IF NOT EXISTS user_lifetime_stats (
     favorite_locations TEXT,
     PRIMARY KEY (user_id, group_id)
 );
+
+CREATE TABLE IF NOT EXISTS daily_stats (
+    date TEXT NOT NULL,
+    group_id TEXT NOT NULL,
+    text_count INTEGER DEFAULT 0,
+    sticker_count INTEGER DEFAULT 0,
+    image_count INTEGER DEFAULT 0,
+    video_count INTEGER DEFAULT 0,
+    travel_mentions INTEGER DEFAULT 0,
+    active_users INTEGER DEFAULT 0,
+    PRIMARY KEY (date, group_id)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_stats_date ON daily_stats(date DESC);
 """
 
 

@@ -320,6 +320,17 @@ class SassyBrain:
                 )
                 logger.info("[BADGE] 每小時 :05 徽章發放排程已啟動")
 
+                self._scheduler.add_job(
+                    self._send_anniversary_reminders,
+                    trigger='cron',
+                    hour=10,
+                    minute=0,
+                    id='travel_anniversary',
+                    misfire_grace_time=3600,
+                    coalesce=True,
+                )
+                logger.info("[ANNIVERSARY] 每日 10:00 旅行週年提醒排程已啟動")
+
             self._scheduler.start()
             logger.info(f"[GRADUATION] 排程已啟動，目標群組: {LINE_GROUP_ID}，畢業日: {GRADUATION_DATE}")
         else:
@@ -843,6 +854,36 @@ class SassyBrain:
                 if attempt == 0:
                     time.sleep(2)
         return False
+
+    def _send_anniversary_reminders(self):
+        """每日 10:00：偵測一年前結束的旅行，推送週年提醒到對應群組。"""
+        if not self.line_api:
+            return
+        try:
+            from travel.trip_crud import get_anniversary_trips
+            trips = get_anniversary_trips()
+        except Exception as e:
+            logger.warning(f"[ANNIVERSARY] 查詢週年旅行失敗: {e}")
+            return
+        for trip in trips:
+            group_id = trip.get("group_id")
+            if not group_id:
+                continue
+            title = trip.get("title") or "旅行"
+            location = trip.get("location") or ""
+            loc_suffix = f"（{location}）" if location else ""
+            msg = f"🎉 一年前的今天，你們完成了「{title}」{loc_suffix}！\n是時候計劃下一趟旅程了嗎？🗺️"
+            try:
+                self.line_api.push_message(
+                    PushMessageRequest(
+                        to=group_id,
+                        messages=[LineTextMessage(text=msg)],
+                    ),
+                    _request_timeout=10.0,
+                )
+                logger.info(f"[ANNIVERSARY] 推送週年提醒 trip={trip['id']} group={group_id}")
+            except Exception as e:
+                logger.warning(f"[ANNIVERSARY] 推送失敗 trip={trip['id']}: {e}")
 
     def _watchdog_graduation_push(self):
         """09:05 補推 watchdog：若今日 state 不是 success/in_progress，重跑整個流程。"""

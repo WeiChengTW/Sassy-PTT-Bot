@@ -102,6 +102,7 @@ def award_badges_for_trip(trip_id: str) -> list[dict]:
     if not trip:
         return []
     participants = get_participants(trip_id)
+    trip["participants_count"] = len(participants)
     rarity = compute_rarity(trip)
     emoji = compute_badge_emoji(trip, rarity)
     earned_at = int(time.time())

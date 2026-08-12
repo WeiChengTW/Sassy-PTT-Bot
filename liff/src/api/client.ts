@@ -2,10 +2,12 @@ const API_BASE = '/liff'
 
 let _userId = ''
 let _groupId = ''
+let _idToken = ''
 
-export function setLiffContext(userId: string, groupId: string) {
+export function setLiffContext(userId: string, groupId: string, idToken = '') {
   _userId = userId
   _groupId = groupId
+  _idToken = idToken
 }
 
 async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
@@ -13,6 +15,7 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
     'Content-Type': 'application/json',
     'X-LIFF-UserId': _userId,
     'X-LIFF-GroupId': _groupId,
+    ...(_idToken ? { Authorization: `Bearer ${_idToken}` } : {}),
     ...((opts.headers as Record<string, string>) || {}),
   }
   const res = await fetch(`${API_BASE}${path}`, { ...opts, headers })

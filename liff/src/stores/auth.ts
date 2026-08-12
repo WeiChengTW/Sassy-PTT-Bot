@@ -25,7 +25,8 @@ export const useAuthStore = defineStore('auth', {
       const ctx = liff.getContext()
       this.groupId = (ctx as any)?.groupId || ''
 
-      setLiffContext(this.userId, this.groupId)
+      const idToken = liff.getIDToken() ?? ''
+      setLiffContext(this.userId, this.groupId, idToken)
 
       const me = await api.me()
       this.role = me.role as 'admin' | 'member'

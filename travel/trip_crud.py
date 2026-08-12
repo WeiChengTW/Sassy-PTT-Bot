@@ -67,6 +67,25 @@ def end_trip(trip_id: str) -> dict:
     return {"trip_id": trip_id, "status": "ended", "ended_at": ended_at}
 
 
+def get_anniversary_trips(days_ago: int = 365, window: int = 1) -> list[dict]:
+    """Return ended trips whose ended_at falls within [days_ago±window] days from now."""
+    now = int(time.time())
+    low = now - (days_ago + window) * 86400
+    high = now - (days_ago - window) * 86400
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT t.*, COUNT(tp.user_id) AS participants_count
+               FROM trips t
+               LEFT JOIN trip_participants tp ON tp.trip_id = t.id
+               WHERE t.status = 'ended'
+                 AND t.ended_at IS NOT NULL
+                 AND t.ended_at BETWEEN ? AND ?
+               GROUP BY t.id""",
+            (low, high),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_participants(trip_id: str) -> list[dict]:
     """取得旅行所有參與者，嘗試 JOIN messages 拿 user_name。"""
     with get_conn() as conn:

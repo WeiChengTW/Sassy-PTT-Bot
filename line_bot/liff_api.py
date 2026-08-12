@@ -1,5 +1,8 @@
 """Flask Blueprint — LIFF API endpoints（一般 + 管理員）。"""
 import os
+import time
+import urllib.parse
+import urllib.request
 
 from flask import Blueprint, request, jsonify
 
@@ -13,8 +16,61 @@ from travel.stats_extended import (
 
 liff_bp = Blueprint("liff", __name__, url_prefix="/liff")
 
+# token → (user_id, expiry_epoch)
+_token_cache: dict[str, tuple[str, float]] = {}
+_TOKEN_TTL = 300  # seconds
+
+
+def _verify_liff_token(token: str) -> str | None:
+    """Verify a LINE LIFF ID token via LINE's oauth2 verify endpoint.
+
+    Returns user_id (sub) on success, None on failure.
+    Falls back to None if LIFF_CHANNEL_ID is not configured.
+    """
+    channel_id = os.getenv("LIFF_CHANNEL_ID", "")
+    if not channel_id:
+        return None
+
+    now = time.time()
+    cached = _token_cache.get(token)
+    if cached and cached[1] > now:
+        return cached[0]
+
+    try:
+        import json as _json
+        data = urllib.parse.urlencode({"id_token": token, "client_id": channel_id}).encode()
+        req = urllib.request.Request(
+            "https://api.line.me/oauth2/v2.1/verify",
+            data=data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            body = _json.loads(resp.read())
+        user_id = body.get("sub", "")
+        if user_id:
+            _token_cache[token] = (user_id, now + _TOKEN_TTL)
+            return user_id
+    except Exception:
+        pass
+    return None
+
 
 def _get_liff_user_id() -> str:
+    """Extract verified user_id from Authorization header or fall back to X-LIFF-UserId.
+
+    When LIFF_CHANNEL_ID is set, the Authorization: Bearer <id_token> header is
+    required and verified. Without the env var (local dev), the plain header is accepted.
+    """
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token = auth[7:]
+        verified = _verify_liff_token(token)
+        if verified:
+            return verified
+        # Token present but verification failed → reject (empty string → 403 downstream)
+        if os.getenv("LIFF_CHANNEL_ID"):
+            return ""
     return request.headers.get("X-LIFF-UserId", "")
 
 

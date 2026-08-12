@@ -1,4 +1,5 @@
 """旅行 CRUD 業務邏輯。被 liff_api.py 呼叫，不依賴 Flask。"""
+import sqlite3
 import time
 import uuid
 
@@ -47,7 +48,7 @@ def add_participants(trip_id: str, user_ids: list[str]) -> dict[str, int]:
                     (trip_id, uid, now),
                 )
                 added += 1
-            except Exception:
+            except sqlite3.IntegrityError:
                 pass  # duplicate PRIMARY KEY → skip
         total = conn.execute(
             "SELECT COUNT(*) FROM trip_participants WHERE trip_id = ?", (trip_id,)

@@ -42,6 +42,13 @@ def _forbid(reason: str):
     return jsonify({"error": "forbidden", "reason": reason}), 403
 
 
+def _require_member(user_id: str, group_id: str):
+    """Return 403 tuple if user is not a member of group_id, else None."""
+    if not _is_member(user_id, group_id):
+        return _forbid("not_member")
+    return None
+
+
 # ── 一般 endpoints ──────────────────────────────────────────────────────────
 
 @liff_bp.route("/me")
@@ -56,6 +63,9 @@ def me():
 def dashboard():
     user_id = _get_liff_user_id()
     group_id = _get_liff_group_id()
+    err = _require_member(user_id, group_id)
+    if err:
+        return err
     days = int(request.args.get("days", 30))
     data = get_dashboard_data(group_id, days)
     return jsonify(data)
@@ -63,18 +73,38 @@ def dashboard():
 
 @liff_bp.route("/trips")
 def trips():
+    user_id = _get_liff_user_id()
     group_id = _get_liff_group_id()
+    err = _require_member(user_id, group_id)
+    if err:
+        return err
     return jsonify(get_trips_list(group_id))
 
 
 @liff_bp.route("/trips/<trip_id>")
 def trip_detail(trip_id):
-    return jsonify(get_trip_detail(trip_id))
+    user_id = _get_liff_user_id()
+    group_id = _get_liff_group_id()
+    data = get_trip_detail(trip_id)
+    trip_group_id = data.get("trip", {}).get("group_id")
+    if trip_group_id != group_id:
+        return _forbid("cross_group")
+    err = _require_member(user_id, trip_group_id)
+    if err:
+        return err
+    return jsonify(data)
 
 
 @liff_bp.route("/badges/<user_id>")
 def badges(user_id):
+    requester = _get_liff_user_id()
     group_id = _get_liff_group_id()
+    if not _is_admin(requester) and requester != user_id:
+        return _forbid("not_self_or_admin")
+    if not _is_admin(requester):
+        err = _require_member(requester, group_id)
+        if err:
+            return err
     return jsonify(get_user_badges(user_id, group_id))
 
 

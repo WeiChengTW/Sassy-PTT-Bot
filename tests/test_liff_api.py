@@ -124,3 +124,58 @@ def test_admin_award_badges(client):
     )
     assert r.status_code == 200
     assert "awarded" in r.get_json()
+
+
+def test_dashboard_requires_member(client):
+    # U_MEMBER 在 C1 有 message,但要求 group_id=C2 → 不算 member
+    r = client.get("/liff/dashboard", headers={**_headers("U_MEMBER"), "X-LIFF-GroupId": "C2"})
+    assert r.status_code == 403
+    assert r.get_json()["reason"] == "not_member"
+
+
+def test_trips_requires_member(client):
+    r = client.get("/liff/trips", headers={**_headers("U_MEMBER"), "X-LIFF-GroupId": "C2"})
+    assert r.status_code == 403
+    assert r.get_json()["reason"] == "not_member"
+
+
+def test_trip_detail_cross_group_forbidden(client, db):
+    # 在 C1 建一個 trip,C2 的 member 嘗試存取
+    insert_message({
+        "line_message_id": "seed_c2",
+        "group_id": "C2",
+        "user_id": "U_MEMBER",
+        "user_name": "Member",
+        "type": "text",
+        "content": "hello c2",
+        "metadata": {},
+        "reply_to_message_id": None,
+        "timestamp": int(time.time() * 1000),
+    })
+    trip_id = create_trip("C1", "t", "loc", 1700000000, None, "U_ADMIN")
+    r = client.get(
+        f"/liff/trips/{trip_id}",
+        headers={**_headers("U_MEMBER"), "X-LIFF-GroupId": "C2"},
+    )
+    assert r.status_code == 403
+
+
+def test_badges_self_or_admin(client, db):
+    # 一般 member (U_MEMBER) 要求看 U_OTHER 的 badges → 403
+    r = client.get(
+        "/liff/badges/U_OTHER",
+        headers={**_headers("U_MEMBER"), "X-LIFF-GroupId": "C1"},
+    )
+    assert r.status_code == 403
+    # 改成看自己 → 200
+    r = client.get(
+        "/liff/badges/U_MEMBER",
+        headers={**_headers("U_MEMBER"), "X-LIFF-GroupId": "C1"},
+    )
+    assert r.status_code == 200
+    # admin 看別人 → 200
+    r = client.get(
+        "/liff/badges/U_OTHER",
+        headers={**_headers("U_ADMIN"), "X-LIFF-GroupId": "C1"},
+    )
+    assert r.status_code == 200

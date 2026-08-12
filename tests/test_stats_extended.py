@@ -136,6 +136,17 @@ def test_topics_daily_sentiment(temp_db):
     assert abs(data["daily_sentiment"][0]["avg_sentiment"] - 0.6) < 0.01
 
 
+def test_topics_weekly_trend(temp_db):
+    from travel.stats_extended import get_topics_data
+    ts = 1735693200000  # 2025-01-01
+    with get_conn() as conn:
+        _insert_msg(conn, msg_id="w1", user_id="uA", user_name="A",
+                    timestamp=ts, topics=["旅行"])
+    data = get_topics_data("g1")
+    assert len(data["weekly_trend"]) == 1
+    assert "旅行" in data["weekly_trend"][0]["topics"]
+
+
 # ─── profile ─────────────────────────────────────────────────────────────────
 
 def test_profile_summary(temp_db):

@@ -40,7 +40,7 @@ def compute_rarity(trip: dict) -> Literal["common", "rare", "epic", "legendary"]
         return "legendary"
 
     start = trip.get("start_date") or 0
-    end = trip.get("end_date") or start
+    end = trip.get("ended_at") or trip.get("end_date") or start
     days = max(1, round((end - start) / 86400))
 
     participants = trip.get("participants_count") or 0

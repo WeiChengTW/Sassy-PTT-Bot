@@ -52,6 +52,18 @@ def test_compute_rarity_legendary_abroad(db):
     assert compute_rarity(trip) == "legendary"
 
 
+def test_compute_rarity_uses_ended_at_when_end_date_missing(db):
+    """Regression: end_date may be None in production, compute_rarity must use ended_at."""
+    from travel.badges import compute_rarity
+    trip = {
+        "start_date": 1700000000,
+        "ended_at": 1700000000 + 3 * 86400,
+        "participants_count": 3,
+        "location": "台中",
+    }
+    assert compute_rarity(trip) == "rare"
+
+
 def test_compute_badge_emoji_beach(db):
     from travel.badges import compute_badge_emoji
     trip = {"location": "墾丁海邊"}

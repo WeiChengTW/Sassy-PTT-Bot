@@ -200,7 +200,23 @@ class SassyBrain:
             def on_message(event):
                 self.handle_line_event(event)
 
+            @self.line_handler.add(MessageEvent)
+            def on_store(event):
+                if os.getenv("TRAVEL_STORAGE_ENABLED", "true").lower() == "true":
+                    try:
+                        self._store_line_event(event)
+                    except Exception as e:
+                        logger.warning(f"[TRAVEL] 訊息儲存失敗（非致命）: {e}")
+
             logger.info("LINE Bot 已啟用")
+
+        if os.getenv("TRAVEL_STORAGE_ENABLED", "true").lower() == "true":
+            try:
+                from travel.db import init_db
+                init_db()
+                logger.info("[TRAVEL] SQLite 已初始化")
+            except Exception as e:
+                logger.error(f"[TRAVEL] SQLite init 失敗: {e}")
         else:
             logger.info("LINE Bot 未啟用（缺少 LINE_CHANNEL_SECRET 或 LINE_CHANNEL_ACCESS_TOKEN）")
 
@@ -241,6 +257,34 @@ class SassyBrain:
                 misfire_grace_time=3600,
                 coalesce=True,
             )
+
+            if os.getenv("TRAVEL_STORAGE_ENABLED", "true").lower() == "true":
+                from travel.llm_analyzer import run_monthly_analysis
+                from travel.aggregator import run_daily_aggregation
+
+                self._scheduler.add_job(
+                    run_monthly_analysis,
+                    trigger='cron',
+                    day=1,
+                    hour=3,
+                    minute=0,
+                    id='monthly_llm_analysis',
+                    misfire_grace_time=3600,
+                    coalesce=True,
+                )
+                logger.info("[ANALYZER] 每月 1 號 03:00 LLM 分析排程已啟動")
+
+                self._scheduler.add_job(
+                    run_daily_aggregation,
+                    trigger='cron',
+                    hour=4,
+                    minute=0,
+                    id='daily_aggregation',
+                    misfire_grace_time=3600,
+                    coalesce=True,
+                )
+                logger.info("[AGGREGATOR] 每日 04:00 聚合排程已啟動")
+
             self._scheduler.start()
             logger.info(f"[GRADUATION] 排程已啟動，目標群組: {LINE_GROUP_ID}，畢業日: {GRADUATION_DATE}")
         else:
@@ -389,6 +433,47 @@ class SassyBrain:
         except Exception as e:
             logger.error(f"檢索失敗: {e}")
             return None, []
+
+    def _store_line_event(self, event):
+        """從 LINE event 提取資料寫入 SQLite。"""
+        from travel.db import insert_message
+
+        msg = event.message
+        source = event.source
+
+        class_name = type(msg).__name__
+        if class_name.endswith("MessageContent"):
+            msg_type = class_name[: -len("MessageContent")].lower()
+        else:
+            msg_type = "unknown"
+
+        if msg_type == "text":
+            content = getattr(msg, "text", None)
+        else:
+            content = None
+
+        metadata: dict = {}
+        if msg_type == "sticker":
+            metadata["sticker_id"] = getattr(msg, "sticker_id", None)
+            metadata["package_id"] = getattr(msg, "package_id", None)
+
+        sender_user_id = getattr(source, "user_id", "") or ""
+        sender = self._get_sender_label(sender_user_id) if sender_user_id else "路人"
+        group_id = getattr(source, "group_id", "dm")
+
+        timestamp_ms = int(getattr(msg, "timestamp", 0)) or int(time.time() * 1000)
+
+        insert_message({
+            "line_message_id": getattr(msg, "id", None),
+            "group_id": group_id,
+            "user_id": sender_user_id,
+            "user_name": sender,
+            "type": msg_type,
+            "content": content,
+            "metadata": metadata,
+            "reply_to_message_id": None,
+            "timestamp": timestamp_ms,
+        })
 
     def _get_sender_label(self, user_id: str) -> str:
         """LINE user_id → display_name。lazy fetch，cache 進 self._user_names，抓不到就 '路人{user_id[-6:]}'。"""

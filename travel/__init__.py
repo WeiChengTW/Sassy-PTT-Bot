@@ -1,0 +1,1 @@
+"""Travel extension for Sassy PTT Bot (Phase 1: storage + analytics)."""

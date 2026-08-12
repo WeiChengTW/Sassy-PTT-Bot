@@ -31,4 +31,8 @@ export const api = {
     req<any>(`/admin/trips/${tripId}/participants`, { method: 'POST', body: JSON.stringify({ user_ids: userIds }) }),
   adminEndTrip: (tripId: string) => req<any>(`/admin/trips/${tripId}/end`, { method: 'POST' }),
   adminAwardBadges: (tripId: string) => req<any>(`/admin/trips/${tripId}/award-badges`, { method: 'POST' }),
+  leaderboard: () => req<any>('/leaderboard'),
+  interactions: () => req<any>('/interactions'),
+  topics: () => req<any>('/topics'),
+  profile: (userId: string) => req<any>(`/profile/${userId}`),
 }

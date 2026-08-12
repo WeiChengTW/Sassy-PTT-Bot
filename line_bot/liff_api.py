@@ -6,6 +6,10 @@ from flask import Blueprint, request, jsonify
 from travel.stats import get_dashboard_data, get_trips_list, get_trip_detail, get_user_badges
 from travel.trip_crud import create_trip, add_participants, end_trip
 from travel.badges import award_badges_for_trip
+from travel.stats_extended import (
+    get_leaderboard_data, get_interaction_data,
+    get_topics_data, get_profile_data,
+)
 
 liff_bp = Blueprint("liff", __name__, url_prefix="/liff")
 
@@ -153,3 +157,44 @@ def admin_award_badges(trip_id):
         return _forbid("not_admin")
     awarded = award_badges_for_trip(trip_id)
     return jsonify({"awarded": awarded})
+
+
+# ── Phase 3 分析 endpoints ───────────────────────────────────────────────────
+
+@liff_bp.route("/leaderboard")
+def leaderboard():
+    user_id = _get_liff_user_id()
+    group_id = _get_liff_group_id()
+    err = _require_member(user_id, group_id)
+    if err:
+        return err
+    return jsonify(get_leaderboard_data(group_id))
+
+
+@liff_bp.route("/interactions")
+def interactions():
+    user_id = _get_liff_user_id()
+    group_id = _get_liff_group_id()
+    err = _require_member(user_id, group_id)
+    if err:
+        return err
+    return jsonify(get_interaction_data(group_id))
+
+
+@liff_bp.route("/topics")
+def topics():
+    user_id = _get_liff_user_id()
+    group_id = _get_liff_group_id()
+    err = _require_member(user_id, group_id)
+    if err:
+        return err
+    return jsonify(get_topics_data(group_id))
+
+
+@liff_bp.route("/profile/<target_user_id>")
+def profile(target_user_id: str):
+    requester = _get_liff_user_id()
+    group_id = _get_liff_group_id()
+    if not _is_admin(requester) and requester != target_user_id:
+        return _forbid("not_self_or_admin")
+    return jsonify(get_profile_data(target_user_id, group_id))

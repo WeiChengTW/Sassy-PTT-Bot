@@ -98,6 +98,14 @@ TRIGGER_KEYWORDS = [
     "笑死", "幹", "靠北", "三小", "啊不就",
 ]
 
+ADMIN_USER_IDS: set[str] = {
+    uid.strip()
+    for uid in os.getenv("ADMIN_USER_IDS", "").split(",")
+    if uid.strip()
+}
+LIFF_ID = os.getenv("LIFF_ID", "")
+LIFF_URL = f"https://liff.line.me/{LIFF_ID}" if LIFF_ID else "https://liff.line.me/placeholder"
+
 SYSTEM_PROMPT = (
     "你是一個創意寫作角色：PTT 八卦板的資深鄉民。\n"
     "這個角色說話風格極簡短、犀利、帶有台灣網路黑話和鄉民幽默感。\n"
@@ -156,6 +164,31 @@ def should_trigger(text, always=False):
     if any(kw in text for kw in TRIGGER_KEYWORDS):
         return random.random() < 0.3
     return random.random() < 0.1
+
+
+# ── Bot trigger helpers（module-level 可獨立測試）──────────────────────────
+
+def is_group_bare_mention(event) -> bool:
+    """True if group event with only @mention(s) and no other text."""
+    if not getattr(event.source, 'group_id', None):
+        return False
+    msg_text = getattr(event.message, 'text', None)
+    if not msg_text:
+        return False
+    stripped = re.sub(r'@\S+\s*', '', msg_text).strip()
+    return stripped == "" and "@" in msg_text
+
+
+def is_admin_dm(event) -> bool:
+    """True if 1:1 DM from a user listed in ADMIN_USER_IDS."""
+    if getattr(event.source, 'group_id', None):
+        return False
+    admin_ids = {
+        uid.strip()
+        for uid in os.getenv("ADMIN_USER_IDS", "").split(",")
+        if uid.strip()
+    }
+    return getattr(event.source, 'user_id', '') in admin_ids
 
 
 class SassyBrain:
@@ -315,6 +348,59 @@ class SassyBrain:
 
     # ── LINE handlers ──────────────────────────────────────────────────────
 
+    def _is_group_bare_mention(self, event) -> bool:
+        return is_group_bare_mention(event)
+
+    def _is_admin_dm(self, event) -> bool:
+        return is_admin_dm(event)
+
+    def _reply_liff_button(self, event, role: str) -> None:
+        """Reply with a Flex Message LIFF button."""
+        from linebot.v3.messaging import (
+            FlexMessage, FlexBubble, FlexBox, FlexText, FlexButton, URIAction,
+        )
+        if role == "admin":
+            title = "🛠️ 管理員面板"
+            subtitle = "點按下方按鈕進入管理後台"
+            btn_label = "🛠️ 進入管理面板"
+            path = "/admin"
+        else:
+            title = "🧳 旅行回顧"
+            subtitle = "點按查看群組儀表板與徽章"
+            btn_label = "🧳 開啟旅行回顧"
+            path = "/"
+
+        uri = f"{LIFF_URL}{path}"
+        flex_msg = FlexMessage(
+            alt_text=title,
+            contents=FlexBubble(
+                body=FlexBox(
+                    layout="vertical",
+                    contents=[
+                        FlexText(text=title, weight="bold", size="lg"),
+                        FlexText(text=subtitle, size="sm", color="#999999"),
+                    ],
+                ),
+                footer=FlexBox(
+                    layout="vertical",
+                    contents=[
+                        FlexButton(
+                            action=URIAction(label=btn_label, uri=uri),
+                            style="primary",
+                        )
+                    ],
+                ),
+            ),
+        )
+        try:
+            self.line_api.reply_message(
+                ReplyMessageRequest(reply_token=event.reply_token, messages=[flex_msg]),
+                _request_timeout=_LINE_API_TIMEOUT,
+            )
+            logger.info(f"[LIFF] Flex button 回覆成功 role={role}")
+        except Exception as e:
+            logger.error(f"[LIFF] Flex button 回覆失敗: {e}")
+
     def handle_line_event(self, event):
         """同步 LINE 事件處理（Flask 呼叫，用 asyncio.run 橋接非同步）。"""
         if not isinstance(event, MessageEvent):
@@ -325,6 +411,11 @@ class SassyBrain:
                 self._store_line_event(event)
             except Exception as e:
                 logger.warning(f"[TRAVEL] 訊息儲存失敗（非致命）: {e}")
+
+        # [P2] Admin DM → LIFF 管理面板（任何訊息類型都攔截）
+        if self.line_api and self._is_admin_dm(event):
+            self._reply_liff_button(event, role="admin")
+            return
 
         if not isinstance(event.message, TextMessageContent):
             return
@@ -348,8 +439,12 @@ class SassyBrain:
                     clean_text = clean_text[:m.index] + clean_text[m.index + m.length:]
             clean_text = clean_text.strip()
 
-        # 純 @mention 沒有附文字，直接嗆回不過 LLM
+        # [P2] 群組 bare @mention → LIFF 旅行回顧按鈕
         if is_mentioned and not clean_text:
+            if self.line_api and self._is_group_bare_mention(event):
+                self._reply_liff_button(event, role="user")
+                return
+            # fallback：非群組 bare mention（理論上不會跑到這）
             qt = event.message.quote_token
             self.line_api.reply_message(
                 ReplyMessageRequest(

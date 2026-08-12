@@ -82,7 +82,7 @@ def aggregate_lifetime() -> int:
     return len(rows)
 
 
-def aggregate_daily_stats(date_str: str | None = None):
+def aggregate_daily_stats(date_str: str | None = None) -> int:
     """聚合 group-level daily_stats（Phase 2）。"""
     date_str = date_str or time.strftime("%Y-%m-%d")
     with get_conn() as conn:

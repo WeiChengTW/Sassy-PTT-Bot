@@ -31,3 +31,9 @@ ngrok.yml
 
 # Git worktrees
 .worktrees/
+
+# LIFF frontend
+liff/node_modules/
+liff/dist/
+liff/.env.local
+liff/.env.liff

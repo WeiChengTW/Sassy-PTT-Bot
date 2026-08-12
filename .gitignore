@@ -23,6 +23,7 @@ nohup.out
 
 # 其他
 *.json
+!liff/*.json
 Taiba/
 Taiba
 .DS_Store

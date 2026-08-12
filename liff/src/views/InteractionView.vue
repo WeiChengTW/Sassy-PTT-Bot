@@ -34,12 +34,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { api } from '@/api/client'
 
 const data = ref<any>(null)
 const loading = ref(true)
 const svgRef = ref<SVGSVGElement | null>(null)
+const simRef = ref<any>(null)
 const svgW = 340
 const svgH = 280
 
@@ -66,6 +67,7 @@ async function drawGraph() {
     .force('charge', d3.forceManyBody().strength(-120))
     .force('center', d3.forceCenter(svgW / 2, svgH / 2))
     .force('collision', d3.forceCollide().radius((d: any) => rScale(d.message_count) + 4))
+  simRef.value = sim
 
   const link = svg.append('g')
     .selectAll('line')
@@ -112,6 +114,10 @@ async function drawGraph() {
     node.attr('transform', (d: any) => `translate(${d.x},${d.y})`)
   })
 }
+
+onUnmounted(() => {
+  if (simRef.value) simRef.value.stop()
+})
 
 onMounted(async () => {
   try { data.value = await api.interactions() }

@@ -47,7 +47,7 @@ def get_interaction_data(group_id: str) -> dict:
                       COUNT(*) AS count
                FROM messages a
                JOIN messages b ON a.reply_to_message_id = b.line_message_id
-               WHERE a.group_id=? AND b.group_id=?
+               WHERE a.group_id=? AND b.group_id=? AND a.user_id != b.user_id
                GROUP BY a.user_id, b.user_id
                ORDER BY count DESC LIMIT 40""",
             (group_id, group_id),

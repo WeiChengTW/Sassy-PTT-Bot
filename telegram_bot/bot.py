@@ -196,17 +196,9 @@ class SassyBrain:
             line_config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
             self.line_api = MessagingApi(ApiClient(line_config))
 
-            @self.line_handler.add(MessageEvent, message=TextMessageContent)
+            @self.line_handler.add(MessageEvent)
             def on_message(event):
                 self.handle_line_event(event)
-
-            @self.line_handler.add(MessageEvent)
-            def on_store(event):
-                if os.getenv("TRAVEL_STORAGE_ENABLED", "true").lower() == "true":
-                    try:
-                        self._store_line_event(event)
-                    except Exception as e:
-                        logger.warning(f"[TRAVEL] 訊息儲存失敗（非致命）: {e}")
 
             logger.info("LINE Bot 已啟用")
 
@@ -327,6 +319,13 @@ class SassyBrain:
         """同步 LINE 事件處理（Flask 呼叫，用 asyncio.run 橋接非同步）。"""
         if not isinstance(event, MessageEvent):
             return
+
+        if os.getenv("TRAVEL_STORAGE_ENABLED", "true").lower() == "true":
+            try:
+                self._store_line_event(event)
+            except Exception as e:
+                logger.warning(f"[TRAVEL] 訊息儲存失敗（非致命）: {e}")
+
         if not isinstance(event.message, TextMessageContent):
             return
 
@@ -373,7 +372,10 @@ class SassyBrain:
             or 'line_unknown'
         )
         sender_user_id = getattr(event.source, 'user_id', '') or ''
-        sender = self._get_sender_label(sender_user_id)
+        sender = self._get_sender_label(
+            sender_user_id,
+            group_id=getattr(event.source, 'group_id', None),
+        )
 
         # ★ 1. 不管有沒有觸發，都先把 user 訊息寫進歷史
         self._record_turn(line_chat_id, sender, clean_text, "user")
@@ -437,29 +439,28 @@ class SassyBrain:
     def _store_line_event(self, event):
         """從 LINE event 提取資料寫入 SQLite。"""
         from travel.db import insert_message
+        from travel.line_event_parser import (
+            extract_content,
+            extract_message_metadata,
+            extract_message_type,
+            extract_reply_to_message_id,
+        )
 
         msg = event.message
         source = event.source
 
-        class_name = type(msg).__name__
-        if class_name.endswith("MessageContent"):
-            msg_type = class_name[: -len("MessageContent")].lower()
-        else:
-            msg_type = "unknown"
-
-        if msg_type == "text":
-            content = getattr(msg, "text", None)
-        else:
-            content = None
-
-        metadata: dict = {}
-        if msg_type == "sticker":
-            metadata["sticker_id"] = getattr(msg, "sticker_id", None)
-            metadata["package_id"] = getattr(msg, "package_id", None)
+        msg_type = extract_message_type(msg)
+        content = extract_content(msg, msg_type)
+        reply_to = extract_reply_to_message_id(msg)
+        metadata = extract_message_metadata(msg, msg_type)
 
         sender_user_id = getattr(source, "user_id", "") or ""
-        sender = self._get_sender_label(sender_user_id) if sender_user_id else "路人"
         group_id = getattr(source, "group_id", "dm")
+        sender = (
+            self._get_sender_label(sender_user_id, group_id=group_id)
+            if sender_user_id
+            else "路人"
+        )
 
         timestamp_ms = int(getattr(msg, "timestamp", 0)) or int(time.time() * 1000)
 
@@ -471,26 +472,40 @@ class SassyBrain:
             "type": msg_type,
             "content": content,
             "metadata": metadata,
-            "reply_to_message_id": None,
+            "reply_to_message_id": reply_to,
             "timestamp": timestamp_ms,
         })
 
-    def _get_sender_label(self, user_id: str) -> str:
-        """LINE user_id → display_name。lazy fetch，cache 進 self._user_names，抓不到就 '路人{user_id[-6:]}'。"""
+    def _get_sender_label(self, user_id: str, group_id: str | None = None) -> str:
+        """LINE user_id → display_name。
+
+        優先用 get_group_member_profile（群組成員可抓），
+        fallback 到 get_profile（1:1 chat / 已加好友），
+        最後 fallback 到 '路人{user_id[-6:]}'。
+        結果 cache 在 self._user_names。
+        """
         if not user_id:
             return "路人"
         if user_id in self._user_names:
             return self._user_names[user_id]
         name = None
         if self.line_api:
-            try:
-                profile = self.line_api.get_profile(
-                    user_id,
-                    _request_timeout=_LINE_API_TIMEOUT,
-                )
-                name = (getattr(profile, "display_name", "") or "").strip()
-            except Exception as e:
-                logger.debug(f"[SENDER] get_profile 失敗: {e}")
+            if group_id:
+                try:
+                    profile = self.line_api.get_group_member_profile(
+                        group_id, user_id, _request_timeout=_LINE_API_TIMEOUT,
+                    )
+                    name = (getattr(profile, "display_name", "") or "").strip()
+                except Exception as e:
+                    logger.warning(f"[SENDER] get_group_member_profile({group_id}, {user_id}) 失敗: {e}")
+            if not name:
+                try:
+                    profile = self.line_api.get_profile(
+                        user_id, _request_timeout=_LINE_API_TIMEOUT,
+                    )
+                    name = (getattr(profile, "display_name", "") or "").strip()
+                except Exception as e:
+                    logger.warning(f"[SENDER] get_profile({user_id}) 失敗: {e}")
         if not name:
             name = f"路人{user_id[-6:]}"
         self._user_names[user_id] = name
@@ -859,6 +874,10 @@ class SassyBrain:
 def run_line_server(brain: SassyBrain):
     """在獨立執行緒中跑 Flask LINE webhook server。"""
     flask_app = Flask(__name__)
+
+    from telegram_bot.liff_api import liff_bp
+    flask_app.register_blueprint(liff_bp)
+    logger.info("[LIFF] Blueprint registered at /liff/*")
 
     @flask_app.route("/line/callback", methods=['POST'])
     def line_callback():

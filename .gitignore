@@ -27,3 +27,6 @@ Taiba/
 Taiba
 .DS_Store
 ngrok.yml
+
+# Git worktrees
+.worktrees/

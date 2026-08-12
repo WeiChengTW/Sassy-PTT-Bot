@@ -236,8 +236,10 @@ class SassyBrain:
         if os.getenv("TRAVEL_STORAGE_ENABLED", "true").lower() == "true":
             try:
                 from travel.db import init_db
+                from travel.migrations import migrate
                 init_db()
-                logger.info("[TRAVEL] SQLite 已初始化")
+                migrate()
+                logger.info("[TRAVEL] SQLite 已初始化並完成 migration")
             except Exception as e:
                 logger.error(f"[TRAVEL] SQLite init 失敗: {e}")
         else:
@@ -307,6 +309,17 @@ class SassyBrain:
                     coalesce=True,
                 )
                 logger.info("[AGGREGATOR] 每日 04:00 聚合排程已啟動")
+
+                from travel.badges import process_ended_trips
+                self._scheduler.add_job(
+                    process_ended_trips,
+                    trigger='cron',
+                    minute=5,
+                    id='badge_award',
+                    misfire_grace_time=3600,
+                    coalesce=True,
+                )
+                logger.info("[BADGE] 每小時 :05 徽章發放排程已啟動")
 
             self._scheduler.start()
             logger.info(f"[GRADUATION] 排程已啟動，目標群組: {LINE_GROUP_ID}，畢業日: {GRADUATION_DATE}")

@@ -82,11 +82,43 @@ def aggregate_lifetime() -> int:
     return len(rows)
 
 
+def aggregate_daily_stats(date_str: str | None = None):
+    """聚合 group-level daily_stats（Phase 2）。"""
+    date_str = date_str or time.strftime("%Y-%m-%d")
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT group_id,
+                      SUM(CASE WHEN type='text' THEN 1 ELSE 0 END) AS text_count,
+                      SUM(CASE WHEN type='sticker' THEN 1 ELSE 0 END) AS sticker_count,
+                      SUM(CASE WHEN type='image' THEN 1 ELSE 0 END) AS image_count,
+                      SUM(CASE WHEN type='video' THEN 1 ELSE 0 END) AS video_count,
+                      SUM(CASE WHEN is_travel_related=1 THEN 1 ELSE 0 END) AS travel_mentions,
+                      COUNT(DISTINCT user_id) AS active_users
+               FROM messages
+               WHERE date(timestamp/1000, 'unixepoch') = ?
+               GROUP BY group_id""",
+            (date_str,),
+        ).fetchall()
+        for r in rows:
+            conn.execute(
+                """INSERT OR REPLACE INTO daily_stats
+                   (date, group_id, text_count, sticker_count, image_count,
+                    video_count, travel_mentions, active_users)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (date_str, r["group_id"], r["text_count"] or 0,
+                 r["sticker_count"] or 0, r["image_count"] or 0,
+                 r["video_count"] or 0, r["travel_mentions"] or 0,
+                 r["active_users"] or 0),
+            )
+    return len(rows)
+
+
 def run_daily_aggregation():
     """每日聚合（被 APScheduler 觸發）。"""
     n1 = aggregate_daily()
     n2 = aggregate_lifetime()
-    print(f"[AGGREGATOR] daily={n1}, lifetime={n2}")
+    n3 = aggregate_daily_stats()
+    print(f"[AGGREGATOR] daily={n1}, lifetime={n2}, group_stats={n3}")
 
 
 if __name__ == "__main__":

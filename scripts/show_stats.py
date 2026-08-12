@@ -6,9 +6,13 @@
     python scripts/show_stats.py top-users
     python scripts/show_stats.py topics
     python scripts/show_stats.py travel
+    python scripts/show_stats.py dashboard
 """
 import json
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from travel.db import get_conn
 
@@ -125,12 +129,41 @@ def travel_related():
         print(f"  {i:2d}. {r['user_name']}: {r['count']}")
 
 
+def dashboard():
+    with get_conn() as conn:
+        # group-level daily_stats
+        recent = conn.execute("""
+            SELECT date, group_id, text_count, sticker_count, image_count,
+                   active_users, travel_mentions
+            FROM daily_stats
+            ORDER BY date DESC LIMIT 14
+        """).fetchall()
+        groups = conn.execute(
+            "SELECT DISTINCT group_id FROM messages"
+        ).fetchall()
+        trips = conn.execute(
+            "SELECT status, COUNT(*) AS n FROM trips GROUP BY status"
+        ).fetchall()
+        badge_count = conn.execute(
+            "SELECT COUNT(*) FROM badges WHERE user_id IS NOT NULL"
+        ).fetchone()[0]
+    print("=== Dashboard ===")
+    print(f"群組數: {len(groups)}")
+    for t in trips:
+        print(f"  旅行 ({t['status']}): {t['n']}")
+    print(f"已發徽章: {badge_count}")
+    print("--- 近 14 天 daily_stats ---")
+    for r in recent:
+        print(f"  {r['date']} [{r['group_id'][:8]}] text={r['text_count']} active={r['active_users']}")
+
+
 COMMANDS = {
     "overview": overview,
     "user": user_stats,
     "top-users": top_users,
     "topics": topic_distribution,
     "travel": travel_related,
+    "dashboard": dashboard,
 }
 
 

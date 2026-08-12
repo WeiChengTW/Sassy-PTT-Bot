@@ -98,11 +98,6 @@ TRIGGER_KEYWORDS = [
     "笑死", "幹", "靠北", "三小", "啊不就",
 ]
 
-ADMIN_USER_IDS: set[str] = {
-    uid.strip()
-    for uid in os.getenv("ADMIN_USER_IDS", "").split(",")
-    if uid.strip()
-}
 LIFF_ID = os.getenv("LIFF_ID", "")
 LIFF_URL = f"https://liff.line.me/{LIFF_ID}" if LIFF_ID else "https://liff.line.me/placeholder"
 
@@ -183,6 +178,9 @@ def is_admin_dm(event) -> bool:
     """True if 1:1 DM from a user listed in ADMIN_USER_IDS."""
     if getattr(event.source, 'group_id', None):
         return False
+    # Re-read os.getenv on each call (not a module-level constant):
+    # pytest monkeypatch.setenv can't affect module-cached constants,
+    # and admin user_ids may change in long-running deployments.
     admin_ids = {
         uid.strip()
         for uid in os.getenv("ADMIN_USER_IDS", "").split(",")

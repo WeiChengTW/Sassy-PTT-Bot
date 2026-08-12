@@ -11,6 +11,10 @@ const router = createRouter({
     { path: '/admin', component: () => import('@/views/TripAdminListView.vue'), meta: { requiresAdmin: true } },
     { path: '/admin/trips/new', component: () => import('@/views/TripCreateView.vue'), meta: { requiresAdmin: true } },
     { path: '/admin/trips/:id', component: () => import('@/views/TripManageView.vue'), meta: { requiresAdmin: true } },
+    { path: '/leaderboard', component: () => import('@/views/LeaderboardView.vue'), meta: { requiresParticipant: true } },
+    { path: '/interactions', component: () => import('@/views/InteractionView.vue'), meta: { requiresParticipant: true } },
+    { path: '/topics', component: () => import('@/views/TopicsView.vue'), meta: { requiresParticipant: true } },
+    { path: '/profile', component: () => import('@/views/ProfileView.vue'), meta: { requiresParticipant: true } },
     { path: '/403', component: () => import('@/views/ForbiddenView.vue') },
   ],
 })

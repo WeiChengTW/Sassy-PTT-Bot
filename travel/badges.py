@@ -1,4 +1,5 @@
 """Emoji 徽章邏輯（Phase 2）。介面預留給 Phase 2.5 fal.ai 替換。"""
+import sqlite3
 import time
 import uuid
 from typing import Literal
@@ -91,7 +92,7 @@ def _insert_badge(
                  badge_rarity, badge_image_url, description, earned_at),
             )
         return badge_id
-    except Exception:
+    except sqlite3.IntegrityError:
         return None
 
 
@@ -107,7 +108,7 @@ def award_badges_for_trip(trip_id: str) -> list[dict]:
     new_badges = []
     for p in participants:
         user_id = p["user_id"]
-        user_name = p.get("user_name") or user_id
+        user_name = p.get("user_name") or "旅伴"
         name = compute_badge_name(trip, user_name, rarity)
         badge_id = _insert_badge(
             user_id=user_id,
@@ -153,5 +154,5 @@ def process_ended_trips() -> None:
         try:
             new_badges = award_badges_for_trip(trip["id"])
             logger.info(f"[BADGE] trip {trip['id']} 發放 {len(new_badges)} 枚徽章")
-        except Exception as e:
-            logger.error(f"[BADGE] trip {trip['id']} 失敗: {e}")
+        except (sqlite3.Error, OSError) as e:
+            logger.exception(f"[BADGE] trip {trip['id']} 失敗: {e}")

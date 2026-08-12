@@ -1,4 +1,4 @@
-"""測試 telegram_bot/liff_api.py Flask Blueprint。"""
+"""測試 line_bot/liff_api.py Flask Blueprint。"""
 import os
 import tempfile
 import time
@@ -39,7 +39,7 @@ def db(monkeypatch):
 
 @pytest.fixture
 def client(db):
-    from telegram_bot.liff_api import liff_bp
+    from line_bot.liff_api import liff_bp
     app = Flask(__name__)
     app.config["TESTING"] = True
     app.register_blueprint(liff_bp)

@@ -17,8 +17,7 @@ from pathlib import Path
 import chromadb
 from chromadb.utils import embedding_functions
 from openai import AsyncOpenAI
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+
 
 # LINE SDK (optional)
 try:
@@ -57,7 +56,7 @@ except ImportError:
     pass
 
 # --- 3. 配置 ---
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+
 CGU_API_KEY = os.getenv("CGU_LLM_API_KEY")
 CGU_BASE_URL = "https://air.cgu.edu.tw/cgullmapi/v1"
 CGU_MODEL_NAME = "gpt-5-mini"
@@ -215,7 +214,7 @@ class SassyBrain:
             logger.warning("[LLM] CGU_LLM_API_KEY 未設定，fallback 停用")
         self._llm_sem = threading.Semaphore(2)       # @mention 排隊用
         self._spontaneous_lock = threading.Lock()    # 70%/10% 觸發：同時只能一個，否則跳過
-        self._bot_username: str | None = None        # 啟動後第一次訊息時 lazy fetch 並快取
+
         self._chat_histories: dict[str, list[dict]] = {}  # chat_id → [{"sender", "text", "role"}, ...]
         self._user_names: dict[str, str] = {}       # LINE user_id → display_name (lazy fetch + cache)
 
@@ -325,37 +324,6 @@ class SassyBrain:
             logger.info(f"[GRADUATION] 排程已啟動，目標群組: {LINE_GROUP_ID}，畢業日: {GRADUATION_DATE}")
         else:
             logger.warning("[GRADUATION] LINE_GROUP_ID 未設定，倒數排程不啟動")
-
-    # ── Telegram handlers ──────────────────────────────────────────────────
-
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text("笑死，又來一個魯蛇。想問什麼快說啦，我很忙。")
-
-    async def handle_telegram_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_text = update.message.text
-        if not user_text:
-            return
-
-        if not self._bot_username:
-            self._bot_username = (await context.bot.get_me()).username
-        bot_username = self._bot_username
-        mentioned = f"@{bot_username}" in user_text
-        clean_text = re.sub(rf'@{bot_username}\s*', '', user_text).strip()
-
-        if mentioned and not clean_text:
-            await update.message.reply_text("叫我幹嘛，沒事滾開。")
-            return
-
-        if should_trigger(clean_text, always=mentioned):
-            chat_id = str(update.effective_chat.id)
-            tg_user = update.effective_user.username or update.effective_user.first_name or "telegram_user"
-            tg_sender = f"@{tg_user}" if update.effective_user.username else (tg_user or "telegram_user")
-            # ★ 1. 寫 user 訊息進歷史
-            self._record_turn(chat_id, tg_sender, clean_text, "user")
-            response = await self.generate_response(clean_text, chat_id=chat_id)
-            await update.message.reply_text(response)
-            # ★ 2. 寫 bot 回應
-            self._record_turn(chat_id, "鍵盤俠", response, "bot")
 
     # ── LINE handlers ──────────────────────────────────────────────────────
 
@@ -981,7 +949,7 @@ def run_line_server(brain: SassyBrain):
     """在獨立執行緒中跑 Flask LINE webhook server。"""
     flask_app = Flask(__name__)
 
-    from telegram_bot.liff_api import liff_bp
+    from line_bot.liff_api import liff_bp
     flask_app.register_blueprint(liff_bp)
     logger.info("[LIFF] Blueprint registered at /liff/*")
 
@@ -1000,23 +968,12 @@ def run_line_server(brain: SassyBrain):
 
 
 def main():
-    if not TELEGRAM_TOKEN:
-        logger.error("錯誤：請設定 TELEGRAM_TOKEN")
-        return
-
     brain = SassyBrain()
 
-    # 啟動 LINE server（若有設定）
     if brain.line_handler:
-        t = threading.Thread(target=run_line_server, args=(brain,), daemon=True)
-        t.start()
-
-    # 啟動 Telegram polling
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", brain.start))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), brain.handle_telegram_message))
-    logger.info(f"Telegram 機器人已啟動 (primary={PRIMARY_MODEL}, fallback={CGU_MODEL_NAME})。")
-    app.run_polling()
+        run_line_server(brain)
+    else:
+        logger.error("LINE_CHANNEL_SECRET / LINE_CHANNEL_ACCESS_TOKEN 未設定，無法啟動。")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,5 @@ line-bot-sdk==3.14.2
 lxml==5.2.1
 openai==2.24.0
 python-dotenv==1.2.1
-python-telegram-bot==22.7
 requests==2.33.0
 sentence-transformers==5.4.0

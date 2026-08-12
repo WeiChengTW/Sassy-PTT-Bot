@@ -77,6 +77,14 @@ LINE_GROUP_ID = os.getenv("LINE_GROUP_ID", "")
 _grad_date_str = os.getenv("GRADUATION_DATE", "2027-05-30")
 GRADUATION_DATE = date.fromisoformat(_grad_date_str)
 
+# LINE API 同步呼叫的 timeout（秒）。linebot SDK v3 透過 _request_timeout
+# 傳到底層 urllib3.Timeout。沒帶 timeout → LINE server 卡住時整個 Flask
+# handler thread 會跟著卡死（曾因 get_profile 卡 44 分鐘；2026-08-07 事故）。
+_LINE_API_TIMEOUT = 5.0
+# LLM semaphore 等待上限（秒）。超過代表目前有兩個 LLM call 都在塞，
+# 與其無限等不如直接丟掉，避免 reply_token 過期後 silent fail。
+_LLM_SEM_TIMEOUT = 30.0
+
 TRIGGER_KEYWORDS = [
     # 疑問句
     "為什麼", "怎麼", "怎樣", "如何", "哪裡", "哪個", "什麼", "幾點", "多少",
@@ -304,7 +312,8 @@ class SassyBrain:
                 ReplyMessageRequest(
                     reply_token=event.reply_token,
                     messages=[LineTextMessage(text="叫我幹嘛，沒事滾開。", **({'quote_token': qt} if qt else {}))],
-                )
+                ),
+                _request_timeout=_LINE_API_TIMEOUT,
             )
             return
 
@@ -333,7 +342,8 @@ class SassyBrain:
                 try:
                     msg = LineTextMessage(text=response, **({'quote_token': quote_token} if quote_token else {}))
                     self.line_api.reply_message(
-                        ReplyMessageRequest(reply_token=reply_token, messages=[msg])
+                        ReplyMessageRequest(reply_token=reply_token, messages=[msg]),
+                        _request_timeout=_LINE_API_TIMEOUT,
                     )
                     logger.info(f"LINE reply 成功: {repr(response[:30])}")
                     # ★ 2. bot 回應紀錄
@@ -344,9 +354,14 @@ class SassyBrain:
             if is_direct or is_mentioned:
                 # @mention / 私訊：排隊一定回（reply token 30 秒內有效）
                 def reply_mention():
-                    with self._llm_sem:
+                    if not self._llm_sem.acquire(timeout=_LLM_SEM_TIMEOUT):
+                        logger.warning(f"[LLM] semaphore 等超過 {_LLM_SEM_TIMEOUT}s，跳過此次 mention")
+                        return
+                    try:
                         response = asyncio.run(self.generate_response(clean_text, chat_id=line_chat_id))
-                    do_reply(response)
+                        do_reply(response)
+                    finally:
+                        self._llm_sem.release()
                 threading.Thread(target=reply_mention, daemon=True).start()
             else:
                 # 30%/10% 觸發：搶不到 lock 就跳過
@@ -384,7 +399,10 @@ class SassyBrain:
         name = None
         if self.line_api:
             try:
-                profile = self.line_api.get_profile(user_id)
+                profile = self.line_api.get_profile(
+                    user_id,
+                    _request_timeout=_LINE_API_TIMEOUT,
+                )
                 name = (getattr(profile, "display_name", "") or "").strip()
             except Exception as e:
                 logger.debug(f"[SENDER] get_profile 失敗: {e}")

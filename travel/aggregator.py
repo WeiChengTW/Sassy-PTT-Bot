@@ -114,11 +114,16 @@ def aggregate_daily_stats(date_str: str | None = None) -> int:
 
 
 def run_daily_aggregation():
-    """每日聚合（被 APScheduler 觸發）。"""
-    n1 = aggregate_daily()
+    """每日聚合（被 APScheduler 在 04:00 觸發）。
+
+    聚合昨天（已完整的一天）的資料，而非今天。
+    """
+    from datetime import date, timedelta
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    n1 = aggregate_daily(yesterday)
     n2 = aggregate_lifetime()
-    n3 = aggregate_daily_stats()
-    print(f"[AGGREGATOR] daily={n1}, lifetime={n2}, group_stats={n3}")
+    n3 = aggregate_daily_stats(yesterday)
+    print(f"[AGGREGATOR] date={yesterday}, daily={n1}, lifetime={n2}, group_stats={n3}")
 
 
 if __name__ == "__main__":

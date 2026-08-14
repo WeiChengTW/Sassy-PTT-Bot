@@ -1,3 +1,69 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ── Page transitions ─────────────────────────────────────────── */
+.page-enter-active,
+.page-leave-active {
+  transition: opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1),
+              transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+/* ── More sheet transition ────────────────────────────────────── */
+.more-sheet-enter-active,
+.more-sheet-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.more-sheet-enter-from,
+.more-sheet-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+/* ── Skeleton shimmer ─────────────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+/* ── Legendary badge pulse ────────────────────────────────────── */
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4); }
+  50%       { box-shadow: 0 0 12px 4px rgba(245, 158, 11, 0.25); }
+}
+
+.badge-legendary {
+  animation: glow-pulse 2.5s ease-in-out infinite;
+}
+
+/* ── Reduced motion ───────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .page-enter-active,
+  .page-leave-active,
+  .more-sheet-enter-active,
+  .more-sheet-leave-active {
+    transition: opacity 0.1s linear;
+    transform: none !important;
+  }
+  .skeleton {
+    animation: none;
+    background: #e2e8f0;
+  }
+  .badge-legendary {
+    animation: none;
+  }
+}

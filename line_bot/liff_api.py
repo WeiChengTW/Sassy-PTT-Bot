@@ -102,8 +102,30 @@ def _forbid(reason: str):
     return jsonify({"error": "forbidden", "reason": reason}), 403
 
 
+def _resolve_group_id(user_id: str, group_id: str) -> str:
+    """For admins with no group_id header, fall back to the most active group."""
+    if group_id:
+        return group_id
+    if _is_admin(user_id):
+        from travel.db import get_conn
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT group_id FROM messages GROUP BY group_id ORDER BY COUNT(*) DESC LIMIT 1"
+            ).fetchone()
+        return row[0] if row else ""
+    return group_id
+
+
 def _require_member(user_id: str, group_id: str):
-    """Return 403 tuple if user is not a member of group_id, else None."""
+    """Return 403 tuple if user is not a member of group_id, else None.
+
+    Admins bypass the check. If group_id is empty (opened outside LINE group
+    context), fall back to any group the user has messages in.
+    """
+    if _is_admin(user_id):
+        return None
+    if not group_id:
+        return _forbid("no_group_context")
     if not _is_member(user_id, group_id):
         return _forbid("not_member")
     return None
@@ -122,7 +144,7 @@ def me():
 @liff_bp.route("/dashboard")
 def dashboard():
     user_id = _get_liff_user_id()
-    group_id = _get_liff_group_id()
+    group_id = _resolve_group_id(user_id, _get_liff_group_id())
     err = _require_member(user_id, group_id)
     if err:
         return err
@@ -134,7 +156,7 @@ def dashboard():
 @liff_bp.route("/trips")
 def trips():
     user_id = _get_liff_user_id()
-    group_id = _get_liff_group_id()
+    group_id = _resolve_group_id(user_id, _get_liff_group_id())
     err = _require_member(user_id, group_id)
     if err:
         return err
@@ -220,7 +242,7 @@ def admin_award_badges(trip_id):
 @liff_bp.route("/leaderboard")
 def leaderboard():
     user_id = _get_liff_user_id()
-    group_id = _get_liff_group_id()
+    group_id = _resolve_group_id(user_id, _get_liff_group_id())
     err = _require_member(user_id, group_id)
     if err:
         return err
@@ -230,7 +252,7 @@ def leaderboard():
 @liff_bp.route("/interactions")
 def interactions():
     user_id = _get_liff_user_id()
-    group_id = _get_liff_group_id()
+    group_id = _resolve_group_id(user_id, _get_liff_group_id())
     err = _require_member(user_id, group_id)
     if err:
         return err
@@ -240,7 +262,7 @@ def interactions():
 @liff_bp.route("/topics")
 def topics():
     user_id = _get_liff_user_id()
-    group_id = _get_liff_group_id()
+    group_id = _resolve_group_id(user_id, _get_liff_group_id())
     err = _require_member(user_id, group_id)
     if err:
         return err
@@ -250,7 +272,7 @@ def topics():
 @liff_bp.route("/profile/<target_user_id>")
 def profile(target_user_id: str):
     requester = _get_liff_user_id()
-    group_id = _get_liff_group_id()
+    group_id = _resolve_group_id(requester, _get_liff_group_id())
     if not _is_admin(requester) and requester != target_user_id:
         return _forbid("not_self_or_admin")
     return jsonify(get_profile_data(target_user_id, group_id))

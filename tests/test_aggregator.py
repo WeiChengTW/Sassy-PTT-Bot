@@ -42,7 +42,7 @@ def _seed_messages(temp_db, types_per_user):
 
 def test_aggregate_daily_counts_per_type(temp_db):
     _seed_messages(temp_db, {"U1": ["text", "text", "sticker", "image"]})
-    today = time.strftime("%Y-%m-%d")
+    today = time.strftime("%Y-%m-%d", time.gmtime())
     aggregate_daily(today)
     with get_conn() as conn:
         row = conn.execute(
@@ -56,7 +56,7 @@ def test_aggregate_daily_counts_per_type(temp_db):
 
 def test_aggregate_daily_returns_row_count(temp_db):
     _seed_messages(temp_db, {"U1": ["text"], "U2": ["text", "sticker"]})
-    today = time.strftime("%Y-%m-%d")
+    today = time.strftime("%Y-%m-%d", time.gmtime())
     n = aggregate_daily(today)
     assert n == 2
 

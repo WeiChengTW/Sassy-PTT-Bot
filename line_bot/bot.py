@@ -429,12 +429,19 @@ class SassyBrain:
                     clean_text = clean_text[:m.index] + clean_text[m.index + m.length:]
             clean_text = clean_text.strip()
 
-        # [P2] 群組 bare @mention → LIFF 旅行回顧按鈕
+        # [P2] 群組 bare @mention → LIFF 旅行回顧按鈕 (限制僅 ADMIN_USER_IDS 可觸發)
         if is_mentioned and not clean_text:
             if self.line_api and self._is_group_bare_mention(event):
-                self._reply_liff_button(event, role="user")
-                return
-            # fallback：非群組 bare mention（理論上不會跑到這）
+                sender_user_id = getattr(event.source, 'user_id', '') or ''
+                admin_ids = {
+                    uid.strip()
+                    for uid in os.getenv("ADMIN_USER_IDS", "").split(",")
+                    if uid.strip()
+                }
+                if sender_user_id in admin_ids:
+                    self._reply_liff_button(event, role="user")
+                    return
+            # fallback：非管理員 bare mention 或非群組 bare mention
             qt = event.message.quote_token
             self.line_api.reply_message(
                 ReplyMessageRequest(

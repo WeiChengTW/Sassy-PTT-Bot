@@ -50,13 +50,15 @@ def test_bare_mention_dm_is_false(monkeypatch):
     assert is_group_bare_mention(event) is False
 
 
-def test_bare_mention_non_text_is_false(monkeypatch):
-    from line_bot.bot import is_group_bare_mention
+def test_bare_mention_non_admin_returns_fallback(monkeypatch):
+    monkeypatch.setenv("ADMIN_USER_IDS", "U_ADMIN")
+    from line_bot.bot import is_group_bare_mention, is_admin_dm
     event = FakeEvent(
-        source=FakeSource(type="group", user_id="U1", group_id="C1"),
-        message=FakeMsg(text=None),
+        source=FakeSource(type="group", user_id="U_RANDO", group_id="C1"),
+        message=FakeMsg(text="@Sassy"),
     )
-    assert is_group_bare_mention(event) is False
+    assert is_group_bare_mention(event) is True
+    assert is_admin_dm(event) is False
 
 
 def test_admin_dm_true_for_admin_in_dm(monkeypatch):

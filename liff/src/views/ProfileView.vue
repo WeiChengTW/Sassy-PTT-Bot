@@ -1,39 +1,59 @@
 <template>
   <div>
-    <h1 class="text-xl font-bold mb-4">👤 個人檔案</h1>
-    <div v-if="loading" class="text-center py-8 text-gray-400">載入中...</div>
+    <h1 class="text-xl font-bold mb-4 text-gray-900">個人檔案</h1>
+    <div v-if="loading">
+      <div class="grid grid-cols-2 gap-3 mb-6">
+        <div v-for="i in 4" :key="i" class="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+          <div class="skeleton h-8 w-14 rounded mb-2" />
+          <div class="skeleton h-3 w-16 rounded-full" />
+        </div>
+      </div>
+      <div class="skeleton h-4 w-24 rounded-full mb-3" />
+      <div class="skeleton rounded-2xl mb-6" style="height:180px" />
+      <div class="skeleton h-4 w-24 rounded-full mb-3" />
+      <div class="bg-white rounded-2xl border border-gray-100 p-4 mb-6 shadow-sm">
+        <div class="grid grid-cols-4 gap-2">
+          <div v-for="i in 4" :key="i" class="skeleton rounded-xl h-20" />
+        </div>
+      </div>
+    </div>
+    <div v-else-if="error" class="flex flex-col items-center py-16 text-center gap-2">
+      <p class="text-3xl">⚠️</p>
+      <p class="text-sm font-medium text-gray-700">無法載入資料</p>
+      <p class="text-xs text-gray-400">{{ error }}</p>
+    </div>
     <div v-else-if="data">
       <!-- Summary cards -->
       <div class="grid grid-cols-2 gap-3 mb-6">
-        <div class="bg-white rounded-xl p-4 shadow text-center">
-          <p class="text-2xl font-bold">{{ data.summary.total }}</p>
-          <p class="text-xs text-gray-500">總訊息數</p>
+        <div class="bg-blue-50 border border-blue-100 rounded-2xl p-4 shadow-sm">
+          <p class="text-2xl font-bold tabular-nums text-blue-700">{{ data.summary.total.toLocaleString() }}</p>
+          <p class="text-xs text-blue-500 mt-0.5">總訊息數</p>
         </div>
-        <div class="bg-white rounded-xl p-4 shadow text-center">
-          <p class="text-2xl font-bold">{{ data.summary.active_days }}</p>
-          <p class="text-xs text-gray-500">活躍天數</p>
+        <div class="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 shadow-sm">
+          <p class="text-2xl font-bold tabular-nums text-emerald-700">{{ data.summary.active_days }}</p>
+          <p class="text-xs text-emerald-500 mt-0.5">活躍天數</p>
         </div>
-        <div class="bg-white rounded-xl p-4 shadow text-center">
-          <p class="text-2xl font-bold">{{ data.summary.avg_per_day }}</p>
-          <p class="text-xs text-gray-500">平均每日</p>
+        <div class="bg-violet-50 border border-violet-100 rounded-2xl p-4 shadow-sm">
+          <p class="text-2xl font-bold tabular-nums text-violet-700">{{ data.summary.avg_per_day }}</p>
+          <p class="text-xs text-violet-500 mt-0.5">平均每日</p>
         </div>
-        <div class="bg-white rounded-xl p-4 shadow text-center">
-          <p class="text-2xl font-bold">
+        <div class="bg-amber-50 border border-amber-100 rounded-2xl p-4 shadow-sm">
+          <p class="text-2xl font-bold tabular-nums text-amber-700">
             {{ data.avg_sentiment != null ? (data.avg_sentiment >= 0 ? '+' : '') + data.avg_sentiment.toFixed(2) : 'N/A' }}
           </p>
-          <p class="text-xs text-gray-500">平均情緒</p>
+          <p class="text-xs text-amber-500 mt-0.5">平均情緒</p>
         </div>
       </div>
 
       <!-- 訊息類型 -->
-      <h2 class="font-semibold mb-2">📊 訊息類型</h2>
-      <div class="bg-white rounded-xl shadow p-4 mb-6">
+      <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">訊息類型</h2>
+      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-6">
         <Bar :data="typeBarData" :options="barOptions" style="max-height:180px" />
       </div>
 
       <!-- 時段分佈 -->
-      <h2 class="font-semibold mb-2">🕐 活躍時段</h2>
-      <div class="bg-white rounded-xl shadow p-4 mb-6">
+      <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">活躍時段</h2>
+      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-6">
         <div class="grid grid-cols-4 gap-2 text-center text-sm">
           <div v-for="slot in slotList" :key="slot.key"
                class="bg-gray-50 rounded-lg p-2">
@@ -45,20 +65,20 @@
       </div>
 
       <!-- 24h 分佈 -->
-      <h2 class="font-semibold mb-2">📈 24 小時分佈</h2>
-      <div class="bg-white rounded-xl shadow p-4 mb-6">
+      <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">24 小時分佈</h2>
+      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-6">
         <Bar :data="hourlyBarData" :options="hourlyOptions" style="max-height:160px" />
       </div>
 
       <!-- 話題 -->
-      <h2 class="font-semibold mb-2">🏷️ 常聊話題</h2>
-      <div class="bg-white rounded-xl shadow divide-y">
+      <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">常聊話題</h2>
+      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 divide-y overflow-hidden">
         <div v-for="t in data.top_topics" :key="t.topic"
-             class="flex items-center px-4 py-2">
-          <span class="flex-1 text-sm">{{ t.topic }}</span>
-          <span class="text-sm text-gray-500">{{ t.count }} 次</span>
+             class="flex items-center px-4 py-3">
+          <span class="flex-1 text-sm text-gray-800">{{ t.topic }}</span>
+          <span class="text-sm font-semibold tabular-nums text-gray-500">{{ t.count }} 次</span>
         </div>
-        <div v-if="!data.top_topics.length" class="px-4 py-3 text-sm text-gray-400">
+        <div v-if="!data.top_topics.length" class="px-4 py-4 text-sm text-gray-400 text-center">
           尚無話題資料
         </div>
       </div>
@@ -78,6 +98,7 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend)
 const auth = useAuthStore()
 const data = ref<any>(null)
 const loading = ref(true)
+const error = ref('')
 
 const slotList = [
   { key: 'night',   emoji: '🌙', label: '深夜 (0-4)' },
@@ -128,7 +149,7 @@ const hourlyOptions = { responsive: true, plugins: { legend: { display: false } 
 
 onMounted(async () => {
   try { data.value = await api.profile(auth.userId) }
-  catch (e) { console.error(e) }
+  catch (e: any) { error.value = e?.message || '請求失敗'; console.error(e) }
   finally { loading.value = false }
 })
 </script>

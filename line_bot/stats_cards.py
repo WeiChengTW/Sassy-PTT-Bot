@@ -123,6 +123,34 @@ def build_topics_card(topics: dict, liff_url: str) -> FlexBubble:
                    _liff_button("📊 開啟話題分析", f"{liff_url}/topics", BLUE))
 
 
+def build_board_card(board: dict, liff_url: str) -> FlexBubble:
+    """通用排行榜卡片：吃 travel.leaderboards 的 board spec，前 5 名 + highlight。"""
+    rows = (board.get("rows") or [])[:5]
+    accent = board.get("accent") or BLUE
+    title = f"{board.get('emoji', '')} {board.get('title', '排行榜')}".strip()
+    body: list = []
+    if board.get("sparse"):
+        body.append(FlexText(text="※ 資料量少，僅供參考", size="xxs", color="#c08a3e"))
+    if board.get("subtitle"):
+        body.append(FlexText(text=board["subtitle"], size="xs", color="#999999", wrap=True))
+    if rows:
+        for i, r in enumerate(rows, 1):
+            body.append(_rank_row(i, r.get("name") or "路人",
+                                  r.get("value_str") or "", accent))
+    else:
+        body.append(FlexText(text="尚無資料 📭", size="sm", color="#999999"))
+    hi = board.get("highlight")
+    if hi:
+        body.append(FlexSeparator(margin="md"))
+        body.append(FlexText(text=hi.get("label", ""), size="xxs", color="#999999", margin="md"))
+        body.append(FlexText(text=f"{hi.get('name', '')} · {hi.get('value_str', '')}",
+                             size="sm", color="#555555", wrap=True))
+        if hi.get("note"):
+            body.append(FlexText(text=hi["note"], size="xs", color="#999999", wrap=True))
+    return _bubble(title, accent, body,
+                   _liff_button("📊 開啟完整排行", f"{liff_url}/leaderboard", accent))
+
+
 # ── 方案 A / D：週報 / 月報 Carousel（多頁輪播） ─────────────────────
 
 def build_report_carousel(dash: dict, lead: dict, inter: dict, topics: dict,

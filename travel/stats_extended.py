@@ -615,6 +615,156 @@ def _resolve_name(conn, user_id: str) -> str:
     return (row["name"] if row and row["name"] else None) or f"路人{user_id[-6:]}"
 
 
+def get_pulse_data(group_id: str, period: str = "all") -> dict:
+    """群組動態：回應速度、訊息爆發時段、潛水員偵測。
+
+    回應速度與訊息爆發套用 period 過濾；潛水員一律以現在時間計算（不套 period）。
+    """
+    import time as _time
+
+    pf, pp = period_filter(period, "a.timestamp")          # 回應速度用 a.timestamp
+    mpf, mpp = period_filter(period)                        # 訊息爆發用 timestamp
+    with get_conn() as conn:
+        # ── 回應速度：reply self-join，延遲 = a.timestamp - b.timestamp（毫秒）──
+        overall_row = conn.execute(
+            f"""SELECT AVG(a.timestamp - b.timestamp) AS avg_ms, COUNT(*) AS cnt
+               FROM messages a
+               JOIN messages b ON a.reply_to_message_id = b.line_message_id
+               WHERE a.group_id=? AND b.group_id=? AND a.user_id != b.user_id
+                 AND a.timestamp > b.timestamp
+                 AND a.timestamp - b.timestamp < 86400000{pf}""",
+            (group_id, group_id, *pp),
+        ).fetchone()
+        avg_minutes = (
+            round(overall_row["avg_ms"] / 60000.0, 1)
+            if overall_row and overall_row["avg_ms"] is not None else None
+        )
+        reply_count = overall_row["cnt"] if overall_row else 0
+
+        fast_rows = conn.execute(
+            f"""SELECT a.user_id AS user_id,
+                      AVG(a.timestamp - b.timestamp) AS avg_ms,
+                      COUNT(*) AS reply_count
+               FROM messages a
+               JOIN messages b ON a.reply_to_message_id = b.line_message_id
+               WHERE a.group_id=? AND b.group_id=? AND a.user_id != b.user_id
+                 AND a.timestamp > b.timestamp
+                 AND a.timestamp - b.timestamp < 86400000{pf}
+               GROUP BY a.user_id
+               HAVING reply_count >= 2
+               ORDER BY avg_ms ASC LIMIT 5""",
+            (group_id, group_id, *pp),
+        ).fetchall()
+        fastest_responders = [
+            {
+                "user_id": r["user_id"],
+                "name": _resolve_name(conn, r["user_id"]),
+                "avg_minutes": round(r["avg_ms"] / 60000.0, 1),
+                "reply_count": r["reply_count"],
+            }
+            for r in fast_rows
+        ]
+
+        # ── 訊息爆發：每小時 bucket，count > 2×平均 的 top 5 ──
+        hourly_rows = conn.execute(
+            f"""SELECT strftime('%Y-%m-%d %H', timestamp/1000,'unixepoch') AS hour,
+                      COUNT(*) AS count
+               FROM messages WHERE group_id=?{mpf}
+               GROUP BY hour""",
+            (group_id, *mpp),
+        ).fetchall()
+        counts = [r["count"] for r in hourly_rows]
+        avg_hourly = sum(counts) / len(counts) if counts else 0.0
+        bursts = sorted(
+            (
+                {
+                    "hour": r["hour"],
+                    "count": r["count"],
+                    "ratio": round(r["count"] / avg_hourly, 1) if avg_hourly else 0.0,
+                }
+                for r in hourly_rows
+                if avg_hourly and r["count"] > avg_hourly * 2
+            ),
+            key=lambda x: -x["count"],
+        )[:5]
+
+        # ── 潛水員：members 名冊 LEFT JOIN 最後發言時間（用現在計算）──
+        now_ms = int(_time.time() * 1000)
+        lurker_rows = conn.execute(
+            """SELECT m.user_id AS user_id, m.display_name AS display_name,
+                      (SELECT MAX(timestamp) FROM messages
+                       WHERE user_id=m.user_id AND group_id=m.group_id) AS last_seen
+               FROM members m WHERE m.group_id=?""",
+            (group_id,),
+        ).fetchall()
+        lurkers = []
+        for r in lurker_rows:
+            last_seen = r["last_seen"]
+            days = (now_ms - last_seen) / 86_400_000 if last_seen else None
+            if days is None or days > 7:
+                lurkers.append({
+                    "user_id": r["user_id"],
+                    "name": r["display_name"] or _resolve_name(conn, r["user_id"]),
+                    "last_seen": last_seen,
+                    "days_inactive": round(days, 1) if days is not None else None,
+                })
+        lurkers.sort(key=lambda x: (x["days_inactive"] is not None, x["days_inactive"] or 0),
+                     reverse=True)
+
+    return {
+        "response_speed": {
+            "avg_minutes": avg_minutes,
+            "reply_count": reply_count,
+            "fastest_responders": fastest_responders,
+        },
+        "bursts": bursts,
+        "avg_hourly": round(avg_hourly, 1),
+        "lurkers": lurkers,
+    }
+
+
+def _profile_slim(user_id: str, group_id: str, period: str) -> dict:
+    """從 get_profile_data 取出對比用的精簡指標。"""
+    p = get_profile_data(user_id, group_id, period)
+    total = p["summary"]["total"] or 0
+    counts = {t["type"]: t["count"] for t in p["type_breakdown"]}
+    text_ratio = round(counts.get("text", 0) * 100.0 / total, 1) if total else 0.0
+    sticker_ratio = round(counts.get("sticker", 0) * 100.0 / total, 1) if total else 0.0
+    slots = p["time_slots"]
+    top_slot = max(slots, key=slots.get) if sum(slots.values()) else None
+    return {
+        "user_id": user_id,
+        "name": p["display_name"] or f"路人{user_id[-6:]}",
+        "total": total,
+        "active_days": p["summary"]["active_days"],
+        "avg_per_day": p["summary"]["avg_per_day"],
+        "text_ratio": text_ratio,
+        "sticker_ratio": sticker_ratio,
+        "avg_sentiment": p["avg_sentiment"],
+        "top_slot": top_slot,
+        "personality": p["personality"],
+    }
+
+
+def get_compare_data(group_id: str, user_a: str, user_b: str, period: str = "all") -> dict:
+    """成員對比：兩位成員的並排指標 + 相似度百分比。"""
+    a = _profile_slim(user_a, group_id, period)
+    b = _profile_slim(user_b, group_id, period)
+
+    # 相似度：各維度正規化後 1 − 平均差異
+    diffs = []
+    max_total = max(a["total"], b["total"]) or 1
+    diffs.append(abs(a["total"] - b["total"]) / max_total)
+    diffs.append(abs(a["text_ratio"] - b["text_ratio"]) / 100.0)
+    diffs.append(abs(a["sticker_ratio"] - b["sticker_ratio"]) / 100.0)
+    if a["avg_sentiment"] is not None and b["avg_sentiment"] is not None:
+        diffs.append(abs(a["avg_sentiment"] - b["avg_sentiment"]) / 2.0)  # sentiment ∈ [-1,1]
+    diffs.append(0.0 if a["top_slot"] == b["top_slot"] else 1.0)
+    similarity = round((1 - sum(diffs) / len(diffs)) * 100)
+
+    return {"a": a, "b": b, "similarity": similarity}
+
+
 def get_profile_extras(user_id: str, group_id: str, period: str = "all") -> dict:
     """個人頁擴充區塊彙整：里程碑 / 成長 / 情緒 / 社交圈 / 足跡 / 徽章。"""
     from travel.trip_crud import get_user_trips

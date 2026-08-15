@@ -195,6 +195,22 @@
           無夜貓子資料
         </div>
       </div>
+
+      <!-- 更多排行榜（資料驅動） -->
+      <div v-if="boards.length" class="mt-8">
+        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-3">🎯 更多排行榜</h2>
+        <!-- 排行榜選單：emoji chip 自動換行（全部一次可見） -->
+        <div class="flex flex-wrap gap-2 mb-4">
+          <button v-for="b in boards" :key="b.id" @click="selectedId = b.id"
+                  class="px-3 py-1.5 rounded-full text-sm border transition-colors whitespace-nowrap"
+                  :class="selectedId === b.id
+                    ? 'bg-indigo-600 text-white border-indigo-600'
+                    : 'bg-white text-gray-600 border-gray-200'">
+            {{ b.emoji }} {{ b.title }}
+          </button>
+        </div>
+        <BoardCard v-if="selectedBoard" :board="selectedBoard" />
+      </div>
     </div>
   </div>
 </template>
@@ -203,7 +219,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { Pie } from 'vue-chartjs'
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js'
-import { api } from '@/api/client'
+import { api, type Board } from '@/api/client'
+import BoardCard from '@/components/BoardCard.vue'
 
 ChartJS.register(ArcElement, Tooltip, Legend)
 
@@ -212,6 +229,9 @@ const loading = ref(true)
 const error = ref('')
 const badgeSortMode = ref<'weighted' | 'count'>('weighted')
 const activeMessageFilter = ref<'all' | 'text' | 'sticker' | 'image'>('all')
+const boards = ref<Board[]>([])
+const selectedId = ref('')
+const selectedBoard = computed(() => boards.value.find(b => b.id === selectedId.value) || null)
 
 const sortedBadgeRankings = computed(() => {
   const list = [...(data.value?.badge_rankings || [])]
@@ -273,7 +293,12 @@ const pieOptions = {
 }
 
 onMounted(async () => {
-  try { data.value = await api.leaderboard() }
+  try {
+    const [lead, more] = await Promise.all([api.leaderboard(), api.leaderboards()])
+    data.value = lead
+    boards.value = more.boards || []
+    if (boards.value.length) selectedId.value = boards.value[0].id
+  }
   catch (e: any) { error.value = e?.message || '請求失敗'; console.error(e) }
   finally { loading.value = false }
 })

@@ -259,3 +259,104 @@ def test_profile_extras_bundles_all_sections(temp_db):
     for key in ("milestones", "growth", "sentiment_series", "social_circle", "footprints", "badges"):
         assert key in extras
     assert extras["footprints"]["participated"] == 0
+
+
+# ─── pulse（群組動態）───────────────────────────────────────────────────────
+
+def test_pulse_response_speed(temp_db):
+    from travel.stats_extended import get_pulse_data
+    with get_conn() as conn:
+        _insert_msg(conn, msg_id="b1", user_id="uB", user_name="Bob", timestamp=_BASE)
+        # uA 於 5 分鐘後回覆 b1
+        _insert_msg(conn, msg_id="a1", user_id="uA", user_name="Alice",
+                    timestamp=_BASE + 5 * 60000, reply_to="b1")
+        _insert_msg(conn, msg_id="a2", user_id="uA", user_name="Alice",
+                    timestamp=_BASE + 15 * 60000, reply_to="b1")
+    data = get_pulse_data("g1")
+    rs = data["response_speed"]
+    assert rs["avg_minutes"] == 10.0  # (5+15)/2
+    assert rs["reply_count"] == 2
+    assert rs["fastest_responders"][0]["user_id"] == "uA"
+    assert rs["fastest_responders"][0]["avg_minutes"] == 10.0
+
+
+def test_pulse_ignores_self_reply_and_over_24h(temp_db):
+    from travel.stats_extended import get_pulse_data
+    with get_conn() as conn:
+        _insert_msg(conn, msg_id="b1", user_id="uB", user_name="Bob", timestamp=_BASE)
+        # 自我回覆（同人）應被忽略
+        _insert_msg(conn, msg_id="b2", user_id="uB", user_name="Bob",
+                    timestamp=_BASE + 60000, reply_to="b1")
+        # 超過 24h 的回覆應被忽略
+        _insert_msg(conn, msg_id="a1", user_id="uA", user_name="Alice",
+                    timestamp=_BASE + 25 * 3600000, reply_to="b1")
+    data = get_pulse_data("g1")
+    assert data["response_speed"]["reply_count"] == 0
+    assert data["response_speed"]["avg_minutes"] is None
+
+
+def test_pulse_lurkers(temp_db):
+    import time
+    from travel.stats_extended import get_pulse_data
+    now = int(time.time() * 1000)
+    with get_conn() as conn:
+        # 名冊三人
+        for uid, name in [("uA", "Alice"), ("uB", "Bob"), ("uC", "Carol")]:
+            conn.execute(
+                "INSERT INTO members (group_id, user_id, display_name) VALUES (?,?,?)",
+                ("g1", uid, name),
+            )
+        # uA 今天發言、uB 10 天前、uC 從未發言
+        _insert_msg(conn, msg_id="a1", user_id="uA", user_name="Alice", timestamp=now)
+        _insert_msg(conn, msg_id="b1", user_id="uB", user_name="Bob",
+                    timestamp=now - 10 * 86400000)
+    data = get_pulse_data("g1")
+    lurker_ids = {l["user_id"] for l in data["lurkers"]}
+    assert lurker_ids == {"uB", "uC"}
+    uc = next(l for l in data["lurkers"] if l["user_id"] == "uC")
+    assert uc["days_inactive"] is None
+
+
+def test_pulse_bursts(temp_db):
+    from travel.stats_extended import get_pulse_data
+    with get_conn() as conn:
+        # 同一小時塞 10 則（爆發），另外兩小時各 1 則
+        for i in range(10):
+            _insert_msg(conn, msg_id=f"burst{i}", user_id="uA", user_name="A",
+                        timestamp=_BASE + i)
+        _insert_msg(conn, msg_id="q1", user_id="uA", user_name="A",
+                    timestamp=_BASE + 3600000)
+        _insert_msg(conn, msg_id="q2", user_id="uA", user_name="A",
+                    timestamp=_BASE + 2 * 3600000)
+    data = get_pulse_data("g1")
+    assert data["bursts"]
+    assert data["bursts"][0]["count"] == 10
+
+
+# ─── compare（成員對比）─────────────────────────────────────────────────────
+
+def test_compare_basic(temp_db):
+    from travel.stats_extended import get_compare_data
+    with get_conn() as conn:
+        for i in range(5):
+            _insert_msg(conn, msg_id=f"a{i}", user_id="uA", user_name="Alice",
+                        timestamp=_BASE + i)
+        _insert_msg(conn, msg_id="b0", user_id="uB", user_name="Bob", timestamp=_BASE)
+    data = get_compare_data("g1", "uA", "uB")
+    assert data["a"]["user_id"] == "uA"
+    assert data["a"]["total"] == 5
+    assert data["b"]["total"] == 1
+    assert 0 <= data["similarity"] <= 100
+
+
+def test_compare_identical_users_high_similarity(temp_db):
+    from travel.stats_extended import get_compare_data
+    with get_conn() as conn:
+        for i in range(3):
+            _insert_msg(conn, msg_id=f"a{i}", user_id="uA", user_name="Alice",
+                        timestamp=_BASE + i)
+            _insert_msg(conn, msg_id=f"b{i}", user_id="uB", user_name="Bob",
+                        timestamp=_BASE + i)
+    data = get_compare_data("g1", "uA", "uB")
+    # 兩人資料完全對稱 → 相似度應很高
+    assert data["similarity"] >= 90

@@ -53,6 +53,9 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
     (5, [  # messages 複合索引
         "CREATE INDEX IF NOT EXISTS idx_messages_user_group ON messages(user_id, group_id)",
     ]),
+    (6, [  # trips 支援自訂 emoji
+        "ALTER TABLE trips ADD COLUMN custom_emoji TEXT",
+    ]),
 ]
 
 

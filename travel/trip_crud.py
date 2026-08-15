@@ -14,17 +14,19 @@ def create_trip(
     start_date: int,
     trip_types: list[str] | str | None,
     created_by: str,
+    end_date: int | None = None,
+    custom_emoji: str | None = None,
 ) -> str:
-    """建立旅行，回傳 trip_id（UUID）。trip_types 正規化成 JSON 陣列字串儲存。"""
+    """建立旅行/事件，回傳 trip_id（UUID）。trip_types 正規化成 JSON 陣列字串儲存。"""
     trip_id = str(uuid.uuid4())
     now = int(time.time())
     trip_type = normalize_trip_types(trip_types)
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO trips
-               (id, group_id, title, location, start_date, trip_type, created_by, created_at, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'planning')""",
-            (trip_id, group_id, title, location, start_date, trip_type, created_by, now),
+               (id, group_id, title, location, start_date, end_date, trip_type, custom_emoji, created_by, created_at, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'planning')""",
+            (trip_id, group_id, title, location, start_date, end_date, trip_type, custom_emoji, created_by, now),
         )
     return trip_id
 
@@ -69,8 +71,20 @@ def end_trip(trip_id: str) -> dict:
     return {"trip_id": trip_id, "status": "ended", "ended_at": ended_at}
 
 
-def update_trip(trip_id: str, title: str | None = None, location: str | None = None, rarity: str | None = None) -> dict:
-    """更新旅行名稱、地點、稀有度，並同步更新關聯的徽章。"""
+def update_trip(
+    trip_id: str,
+    title: str | None = None,
+    location: str | None = None,
+    rarity: str | None = None,
+    trip_types: list[str] | str | None = None,
+    custom_emoji: str | None = None,
+    start_date: int | None = None,
+    end_date: int | None = "__KEEP__",
+) -> dict:
+    """更新旅行名稱、地點、稀有度、類型標籤、自訂 emoji、日期。
+
+    end_date 預設為保留原值 (sentinel "__KEEP__")；傳 None 表示明確清除。
+    """
     old_trip = get_trip(trip_id)
     if not old_trip:
         raise ValueError("Trip not found")
@@ -92,6 +106,15 @@ def update_trip(trip_id: str, title: str | None = None, location: str | None = N
         updates.append("location = ?")
         params.append(location.strip() or None)
 
+    if custom_emoji is not None:
+        updates.append("custom_emoji = ?")
+        params.append(custom_emoji.strip() or None)
+
+    if trip_types is not None:
+        normalized_types = normalize_trip_types(trip_types)
+        updates.append("trip_type = ?")
+        params.append(normalized_types)
+
     if rarity is not None:
         valid_rarities = {"common", "rare", "super_rare", "epic", "legendary"}
         clean_rarity = rarity.strip()
@@ -99,6 +122,14 @@ def update_trip(trip_id: str, title: str | None = None, location: str | None = N
             raise ValueError(f"Invalid rarity: {rarity}")
         updates.append("rarity = ?")
         params.append(clean_rarity)
+
+    if start_date is not None:
+        updates.append("start_date = ?")
+        params.append(int(start_date))
+
+    if end_date != "__KEEP__":
+        updates.append("end_date = ?")
+        params.append(int(end_date) if end_date is not None else None)
 
     if not updates:
         return {"trip_id": trip_id, "success": True}
@@ -127,6 +158,10 @@ def update_trip(trip_id: str, title: str | None = None, location: str | None = N
         "title": updated_trip.get("title"),
         "location": updated_trip.get("location"),
         "rarity": updated_trip.get("rarity"),
+        "trip_type": updated_trip.get("trip_type"),
+        "custom_emoji": updated_trip.get("custom_emoji"),
+        "start_date": updated_trip.get("start_date"),
+        "end_date": updated_trip.get("end_date"),
         "success": True,
     }
 

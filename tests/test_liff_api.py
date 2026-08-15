@@ -283,3 +283,48 @@ def test_profile_endpoint_not_self_forbidden(client, temp_db):
     res = client.get("/liff/profile/uMember",
                      headers={"X-LIFF-UserId": "stranger", "X-LIFF-GroupId": "gTest"})
     assert res.status_code == 403
+
+
+# ─── pulse / compare endpoints ───────────────────────────────────────────────
+
+def test_pulse_endpoint(client):
+    r = client.get("/liff/pulse", headers=_headers("U_MEMBER"))
+    assert r.status_code == 200
+    data = r.get_json()
+    for key in ("response_speed", "bursts", "lurkers"):
+        assert key in data
+
+
+def test_pulse_requires_member(client):
+    # 完全沒有任何訊息的陌生人 → 無法 fallback，會被 gate
+    r = client.get("/liff/pulse",
+                   headers={"X-LIFF-UserId": "U_STRANGER", "X-LIFF-GroupId": "C2"})
+    assert r.status_code == 403
+    assert r.get_json()["reason"] == "not_member"
+
+
+def test_compare_missing_users_400(client):
+    r = client.get("/liff/compare?a=U_MEMBER", headers=_headers("U_MEMBER"))
+    assert r.status_code == 400
+    assert r.get_json()["error"] == "missing_users"
+
+
+def test_compare_endpoint(client):
+    # 再塞一位成員 U2 到 C1
+    insert_message({
+        "line_message_id": "seed2", "group_id": "C1", "user_id": "U2",
+        "user_name": "Member2", "type": "text", "content": "hey", "metadata": {},
+        "reply_to_message_id": None, "timestamp": int(time.time() * 1000),
+    })
+    r = client.get("/liff/compare?a=U_MEMBER&b=U2", headers=_headers("U_MEMBER"))
+    assert r.status_code == 200
+    data = r.get_json()
+    assert data["a"]["user_id"] == "U_MEMBER"
+    assert data["b"]["user_id"] == "U2"
+    assert "similarity" in data
+
+
+def test_compare_requires_member(client):
+    r = client.get("/liff/compare?a=U_MEMBER&b=U2",
+                   headers={"X-LIFF-UserId": "U_STRANGER", "X-LIFF-GroupId": "C2"})
+    assert r.status_code == 403

@@ -83,3 +83,50 @@ def test_get_user_badges_returns_list(db):
     badges = get_user_badges("U1", "C1")
     assert len(badges) == 1
     assert badges[0]["badge_rarity"] is not None
+
+# ─── 群組健康度 / 預測 ───────────────────────────────────────────────────────
+
+def test_dashboard_includes_health_and_weekly_trend(db):
+    from travel.stats import get_dashboard_data
+    _seed_messages(n=10)
+    data = get_dashboard_data("C1")
+    assert "health" in data and "weekly_trend" in data
+    h = data["health"]
+    for key in ("overall", "activity", "diversity", "sentiment", "participation", "suggestions"):
+        assert key in h
+    assert 0 <= h["overall"] <= 100
+    assert isinstance(h["suggestions"], list) and h["suggestions"]
+
+
+def test_health_sentiment_none_when_unanalyzed(db):
+    from travel.stats import get_dashboard_data
+    _seed_messages(n=5)  # 無 sentiment 欄位
+    h = get_dashboard_data("C1")["health"]
+    assert h["sentiment"] is None
+    # sentiment 缺席時 overall 仍應為有效數值
+    assert 0 <= h["overall"] <= 100
+
+
+def test_weekly_trend_structure(db):
+    import time
+    from travel.db import insert_message
+    from travel.stats import get_dashboard_data
+    now = int(time.time() * 1000)
+    day = 86400 * 1000
+    # 本週 5 則、上週 2 則
+    for i in range(5):
+        insert_message({
+            "line_message_id": f"tw{i}", "group_id": "C1", "user_id": "U1",
+            "user_name": "U1", "type": "text", "content": "hi", "metadata": {},
+            "reply_to_message_id": None, "timestamp": now - i * 3600 * 1000,
+        })
+    for i in range(2):
+        insert_message({
+            "line_message_id": f"lw{i}", "group_id": "C1", "user_id": "U1",
+            "user_name": "U1", "type": "text", "content": "hi", "metadata": {},
+            "reply_to_message_id": None, "timestamp": now - 8 * day - i * 3600 * 1000,
+        })
+    wt = get_dashboard_data("C1")["weekly_trend"]
+    assert "weeks" in wt
+    assert wt["this_week"] >= 0
+    assert isinstance(wt["weeks"], list)

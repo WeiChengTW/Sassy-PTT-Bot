@@ -15,7 +15,10 @@ const router = createRouter({
     { path: '/leaderboard', component: () => import('@/views/LeaderboardView.vue'), meta: { requiresParticipant: true } },
     { path: '/interactions', component: () => import('@/views/InteractionView.vue'), meta: { requiresParticipant: true } },
     { path: '/topics', component: () => import('@/views/TopicsView.vue'), meta: { requiresParticipant: true } },
+    { path: '/map', component: () => import('@/views/MapView.vue'), meta: { requiresParticipant: true } },
     { path: '/profile', component: () => import('@/views/ProfileView.vue'), meta: { requiresParticipant: true } },
+    { path: '/pulse', component: () => import('@/views/GroupPulseView.vue'), meta: { requiresParticipant: true } },
+    { path: '/compare', component: () => import('@/views/CompareView.vue'), meta: { requiresParticipant: true } },
     { path: '/403', component: () => import('@/views/ForbiddenView.vue') },
   ],
 })

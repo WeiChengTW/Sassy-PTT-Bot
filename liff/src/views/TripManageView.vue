@@ -13,6 +13,13 @@
             </button>
           </div>
           <p class="text-gray-500 text-sm mt-1">📍 {{ detail.trip.location || '無指定地點' }}</p>
+          <div v-if="detail.trip.trip_types && detail.trip.trip_types.length"
+               class="flex flex-wrap gap-1.5 mt-2">
+            <span v-for="ty in detail.trip.trip_types" :key="ty"
+                  class="inline-flex items-center gap-1 rounded-full bg-blue-50 text-blue-600 px-2.5 py-0.5 text-xs font-medium">
+              {{ emojiFor(ty) }} {{ labelFor(ty) }}
+            </span>
+          </div>
           <div class="flex items-center gap-2 text-xs mt-2">
             <span>狀態：
               <span :class="detail.trip.status === 'ended' ? 'text-gray-400' : 'text-blue-600'">
@@ -29,13 +36,53 @@
 
         <!-- 編輯模式 -->
         <div v-else class="space-y-3">
-          <div>
-            <label class="block text-xs font-semibold text-gray-500 mb-1">旅行名稱 *</label>
-            <input v-model="editForm.title" class="w-full border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:border-blue-500" placeholder="例如：墾丁三日遊" />
+          <div class="flex gap-2 items-start">
+            <div class="w-16 shrink-0">
+              <label class="block text-xs font-semibold text-gray-500 mb-1">Emoji</label>
+              <input v-model="editForm.custom_emoji" class="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-center text-base focus:outline-none focus:border-blue-500" placeholder="🎒" />
+            </div>
+            <div class="flex-1 min-w-0">
+              <label class="block text-xs font-semibold text-gray-500 mb-1">旅行名稱 *</label>
+              <input v-model="editForm.title" class="w-full border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:border-blue-500" placeholder="例如：墾丁三日遊" />
+            </div>
           </div>
           <div>
             <label class="block text-xs font-semibold text-gray-500 mb-1">地點</label>
             <input v-model="editForm.location" class="w-full border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:border-blue-500" placeholder="例如：墾丁" />
+          </div>
+
+          <!-- 日期編輯 -->
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block text-xs font-semibold text-gray-500 mb-1">開始日期 *</label>
+              <input v-model="editForm.startDate" type="date" required
+                     class="w-full border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:border-blue-500" />
+            </div>
+            <div>
+              <label class="flex items-center gap-1 text-xs font-semibold text-gray-500 mb-1">
+                結束日期
+                <span class="text-[10px] text-gray-400 font-normal">（留空 = 當天事件）</span>
+              </label>
+              <input v-model="editForm.endDate" type="date"
+                     :min="editForm.startDate || undefined"
+                     class="w-full border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:border-blue-500" />
+            </div>
+          </div>
+          <div v-if="tripKindLabel" class="text-[11px] text-gray-400">
+            目前分類：<span :class="tripKindLabel.color">{{ tripKindLabel.text }}</span>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-500 mb-1">類型標籤（可複選）</label>
+            <div class="flex flex-wrap gap-1.5">
+              <button v-for="t in TRIP_TYPES" :key="t.value" type="button"
+                      @click="toggleType(t.value)"
+                      class="rounded-full px-2.5 py-1 text-xs border transition-colors"
+                      :class="editForm.types.includes(t.value)
+                        ? 'bg-blue-600 text-white border-blue-600 font-medium'
+                        : 'bg-gray-50 text-gray-600 border-gray-200'">
+                {{ t.emoji }} {{ t.label }}
+              </button>
+            </div>
           </div>
           <div>
             <label class="block text-xs font-semibold text-gray-500 mb-1">稀有度等級</label>
@@ -114,6 +161,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '@/api/client'
 import { rarityOf } from '@/constants/rarity'
+import { TRIP_TYPES, emojiFor, labelFor } from '@/constants/tripTypes'
 
 const route = useRoute()
 const tripId = route.params.id as string
@@ -124,13 +172,29 @@ const membersLoading = ref(true)
 const actionLoading = ref(false)
 const isEditing = ref(false)
 const saving = ref(false)
-const editForm = ref({ title: '', location: '', rarity: 'common' })
+const editForm = ref({
+  title: '',
+  location: '',
+  rarity: 'common',
+  types: [] as string[],
+  custom_emoji: '',
+  startDate: '',
+  endDate: '',
+})
 const members = ref<{ user_id: string; display_name: string; resolved: number }[]>([])
 const selected = ref<Set<string>>(new Set())
 const message = ref('')
 const error = ref('')
 
 const rarity = computed(() => rarityOf(detail.value?.trip?.rarity))
+
+const tripKindLabel = computed(() => {
+  const sd = editForm.value.startDate
+  const ed = editForm.value.endDate
+  if (!sd) return null
+  if (ed && ed !== sd) return { text: '多日旅行 🧳', color: 'text-blue-600 font-medium' }
+  return { text: '當天事件 ⚡', color: 'text-amber-600 font-medium' }
+})
 
 const rarityOptions = [
   { key: 'common', zh: '普通', pill: 'bg-gray-100 text-gray-700' },
@@ -140,11 +204,29 @@ const rarityOptions = [
   { key: 'legendary', zh: '傳說', pill: 'bg-rose-100 text-rose-700' },
 ]
 
+function toDateInput(ts: number | null | undefined) {
+  if (!ts) return ''
+  const d = new Date(ts * 1000)
+  const pad = (n: number) => n.toString().padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+function toggleType(typeVal: string) {
+  const i = editForm.value.types.indexOf(typeVal)
+  if (i >= 0) editForm.value.types.splice(i, 1)
+  else editForm.value.types.push(typeVal)
+}
+
 function startEdit() {
+  const t = detail.value?.trip || {}
   editForm.value = {
-    title: detail.value?.trip?.title || '',
-    location: detail.value?.trip?.location || '',
-    rarity: detail.value?.trip?.rarity || 'common',
+    title: t.title || '',
+    location: t.location || '',
+    rarity: t.rarity || 'common',
+    types: [...(t.trip_types || [])],
+    custom_emoji: t.custom_emoji || t.badge_emoji || '',
+    startDate: toDateInput(t.start_date),
+    endDate: toDateInput(t.end_date),
   }
   isEditing.value = true
 }
@@ -154,10 +236,20 @@ async function saveEdit() {
   saving.value = true
   message.value = ''; error.value = ''
   try {
+    const startTs = editForm.value.startDate
+      ? Math.floor(new Date(editForm.value.startDate).getTime() / 1000)
+      : null
+    const endTs = editForm.value.endDate
+      ? Math.floor(new Date(editForm.value.endDate).getTime() / 1000)
+      : null
     await api.adminUpdateTrip(tripId, {
       title: editForm.value.title.trim(),
       location: editForm.value.location.trim(),
       rarity: editForm.value.rarity,
+      types: editForm.value.types,
+      custom_emoji: editForm.value.custom_emoji.trim(),
+      start_date: startTs,
+      end_date: endTs,
     })
     await load()
     isEditing.value = false

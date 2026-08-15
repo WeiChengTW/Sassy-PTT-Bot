@@ -2,11 +2,18 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  body {
+    @apply bg-surface-subtle text-slate-800 font-sans antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
 /* ── Page transitions ─────────────────────────────────────────── */
 .page-enter-active,
 .page-leave-active {
-  transition: opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1),
-              transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 0.24s cubic-bezier(0.16, 1, 0.3, 1),
+              transform 0.24s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .page-enter-from {
   opacity: 0;
@@ -20,12 +27,45 @@
 /* ── More sheet transition ────────────────────────────────────── */
 .more-sheet-enter-active,
 .more-sheet-leave-active {
-  transition: opacity 0.18s ease, transform 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+              transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .more-sheet-enter-from,
 .more-sheet-leave-to {
   opacity: 0;
-  transform: translateY(8px);
+  transform: translateY(12px) scale(0.98);
+}
+
+/* ── Card Rise Animation & Stagger ───────────────────────────── */
+@keyframes card-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.card-rise {
+  animation: card-rise 0.32s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+.stagger > *:nth-child(1) { animation-delay: 0ms; }
+.stagger > *:nth-child(2) { animation-delay: 40ms; }
+.stagger > *:nth-child(3) { animation-delay: 80ms; }
+.stagger > *:nth-child(4) { animation-delay: 120ms; }
+.stagger > *:nth-child(5) { animation-delay: 160ms; }
+.stagger > *:nth-child(6) { animation-delay: 200ms; }
+.stagger > *:nth-child(n+7) { animation-delay: 240ms; }
+
+/* ── Button Press Interaction ─────────────────────────────────── */
+.btn-press {
+  transition: transform 120ms cubic-bezier(0.4, 0, 0.2, 1), opacity 120ms ease;
+}
+.btn-press:active:not(:disabled) {
+  transform: scale(0.95);
 }
 
 /* ── Skeleton shimmer ─────────────────────────────────────────── */
@@ -35,46 +75,61 @@
 }
 
 .skeleton {
-  background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+  background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%);
   background-size: 800px 100%;
   animation: shimmer 1.4s ease-in-out infinite;
 }
 
-/* ── Legendary (Red) badge pulse ──────────────────────────────── */
+/* ── Legendary Badge Glow Shimmer ────────────────────────────── */
 @keyframes glow-pulse-legendary {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.4); }
-  50%       { box-shadow: 0 0 12px 4px rgba(244, 63, 94, 0.25); }
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.4), 0 0 10px 2px rgba(244, 63, 94, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(244, 63, 94, 0.1), 0 0 20px 6px rgba(244, 63, 94, 0.3);
+  }
 }
 
 .badge-legendary {
-  animation: glow-pulse-legendary 2.5s ease-in-out infinite;
+  animation: glow-pulse-legendary 2.6s ease-in-out infinite;
 }
 
-/* ── Epic (Purple) badge pulse ────────────────────────────────── */
+/* ── Epic Badge Glow Pulse ────────────────────────────────────── */
 @keyframes glow-pulse-epic {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(168, 85, 247, 0.4); }
-  50%       { box-shadow: 0 0 12px 4px rgba(168, 85, 247, 0.22); }
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(168, 85, 247, 0.4), 0 0 8px 1px rgba(168, 85, 247, 0.15);
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.1), 0 0 16px 4px rgba(168, 85, 247, 0.25);
+  }
 }
 
 .badge-epic {
-  animation: glow-pulse-epic 2.5s ease-in-out infinite;
+  animation: glow-pulse-epic 2.6s ease-in-out infinite;
 }
 
 /* ── Reduced motion ───────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
-  .page-enter-active,
-  .page-leave-active,
-  .more-sheet-enter-active,
-  .more-sheet-leave-active {
-    transition: opacity 0.1s linear;
-    transform: none !important;
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
   .skeleton {
     animation: none;
     background: #e2e8f0;
   }
-  .badge-legendary,
-  .badge-epic {
-    animation: none;
-  }
+}
+
+/* ── Utility Classes ──────────────────────────────────────────── */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.safe-area-pb {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }

@@ -466,6 +466,18 @@ class SassyBrain:
                 self._admin_push_report(event, "7d", "本週")
             elif arg in ("推播月", "push月", "pushmonth", "推月報"):
                 self._admin_push_report(event, "30d", "本月")
+            elif arg.startswith("排行") and arg.replace("排行", "").strip():
+                # 「排行 <關鍵字>」→ 15 種資料驅動趣味排行榜
+                from travel.leaderboards import get_board, board_menu
+                kw = arg.replace("排行", "").strip()
+                board = get_board(kw, group_id, "all")
+                if board:
+                    bubble = cards.build_board_card(board, LIFF_URL)
+                    self._reply_flex(event, cards.wrap_single(
+                        bubble, f"{board['emoji']} {board['title']}"))
+                else:
+                    menu = "、".join(board_menu())
+                    self._reply_text(event, f"找不到「{kw}」排行榜 🤔\n可用排行榜：\n{menu}")
             elif arg in ("排行", "發言排行", "leaderboard", "rank"):
                 bubble = cards.build_leaderboard_card(get_leaderboard_data(group_id, "all"), LIFF_URL)
                 self._reply_flex(event, cards.wrap_single(bubble, "🏆 發言排行"))

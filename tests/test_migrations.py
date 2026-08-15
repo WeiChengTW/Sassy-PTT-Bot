@@ -28,19 +28,20 @@ def test_migrate_creates_schema_version_table(temp_db):
     assert row is not None
 
 
-def test_migrate_version_reaches_5(temp_db):
-    from travel.migrations import migrate, get_current_version
+def test_migrate_version_reaches_latest(temp_db):
+    from travel.migrations import migrate, get_current_version, MIGRATIONS
     init_db()
     migrate()
-    assert get_current_version() == 5
+    latest = max(v for v, _ in MIGRATIONS)
+    assert get_current_version() == latest
 
 
 def test_migrate_idempotent(temp_db):
-    from travel.migrations import migrate, get_current_version
+    from travel.migrations import migrate, get_current_version, MIGRATIONS
     init_db()
     migrate()
     migrate()  # second run must not raise
-    assert get_current_version() == 5
+    assert get_current_version() == max(v for v, _ in MIGRATIONS)
 
 
 def test_migrate_trips_has_new_columns(temp_db):

@@ -25,7 +25,7 @@ def test_create_trip_returns_id(db):
     from travel.trip_crud import create_trip
     trip_id = create_trip(
         group_id="C1", title="墾丁三日遊", location="墾丁",
-        start_date=1700000000, trip_type="beach", created_by="U1",
+        start_date=1700000000, trip_types=["beach"], created_by="U1",
     )
     assert isinstance(trip_id, str) and len(trip_id) > 0
 
@@ -85,6 +85,26 @@ def test_update_trip_details(db):
     assert trip["title"] == "新名稱"
     assert trip["location"] == "台南"
     assert trip["rarity"] == "epic"
+
+
+def test_update_trip_dates(db):
+    from travel.trip_crud import create_trip, update_trip, get_trip
+    trip_id = create_trip("C1", "測試", "loc", 1700000000, None, "U1")
+    res = update_trip(trip_id, start_date=1700100000, end_date=1700200000)
+    assert res["success"] is True
+    trip = get_trip(trip_id)
+    assert trip["start_date"] == 1700100000
+    assert trip["end_date"] == 1700200000
+
+
+def test_update_trip_clear_end_date(db):
+    """管理員可清除 end_date（讓 travel 變回 event）。"""
+    from travel.trip_crud import create_trip, update_trip, get_trip
+    trip_id = create_trip("C1", "測試", "loc", 1700000000, None, "U1", end_date=1700200000)
+    res = update_trip(trip_id, end_date=None)
+    assert res["success"] is True
+    trip = get_trip(trip_id)
+    assert trip["end_date"] is None
 
 def test_get_user_trips_participation_and_initiated(db):
     from travel.trip_crud import create_trip, add_participants, get_user_trips

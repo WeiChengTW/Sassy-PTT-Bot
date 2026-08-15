@@ -57,6 +57,53 @@
         </div>
       </div>
 
+      <!-- 群組健康度 -->
+      <template v-if="data.health">
+        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">群組健康度</h2>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-6">
+          <div class="flex items-center gap-4">
+            <div class="text-center shrink-0">
+              <p class="text-4xl font-bold tabular-nums text-indigo-600 leading-none">{{ data.health.overall }}</p>
+              <p class="text-[11px] text-gray-400 mt-1">/ 100</p>
+            </div>
+            <div class="flex-1 min-w-0" style="max-height:180px">
+              <Radar :data="healthRadarData" :options="healthRadarOptions" style="max-height:180px" />
+            </div>
+          </div>
+          <ul v-if="data.health.suggestions?.length" class="mt-3 space-y-1">
+            <li v-for="s in data.health.suggestions" :key="s" class="text-xs text-gray-500 flex gap-1.5">
+              <span class="text-indigo-400">•</span>{{ s }}
+            </li>
+          </ul>
+        </div>
+      </template>
+
+      <!-- 活躍時段熱力圖 -->
+      <template v-if="data.heatmap && data.heatmap.length">
+        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">群組活躍時段</h2>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-6">
+          <HeatmapChart :data="data.heatmap" :date-data="data.recent_date_heatmap" />
+        </div>
+      </template>
+
+      <!-- 每週趨勢對比 -->
+      <template v-if="weekly && weekly.weeks.length">
+        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">每週趨勢</h2>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-3">
+          <div class="flex items-baseline gap-2 mb-2">
+            <span class="text-2xl font-bold tabular-nums text-sky-700">{{ weekly.this_week.toLocaleString() }}</span>
+            <span class="text-xs text-gray-400">本週</span>
+            <span v-if="weekly.growth_percent !== null"
+                  class="text-xs font-semibold"
+                  :class="weekly.growth_percent >= 0 ? 'text-emerald-600' : 'text-rose-500'">
+              {{ weekly.growth_percent >= 0 ? '↑' : '↓' }}{{ Math.abs(weekly.growth_percent) }}%
+            </span>
+            <span class="text-xs text-gray-300 ml-auto tabular-nums">上週 {{ weekly.last_week.toLocaleString() }}</span>
+          </div>
+          <Bar :data="weeklyBarData" :options="weeklyOptions" style="max-height:160px" />
+        </div>
+      </template>
+
       <!-- 月成長趨勢 -->
       <template v-if="data.monthly_trend && data.monthly_trend.length">
         <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">月成長趨勢</h2>
@@ -118,24 +165,21 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { Bar, Line } from 'vue-chartjs'
+import { Bar, Line, Radar } from 'vue-chartjs'
 import {
-  Chart as ChartJS, CategoryScale, LinearScale,
+  Chart as ChartJS, CategoryScale, LinearScale, RadialLinearScale,
   BarElement, PointElement, LineElement, Tooltip, Legend, Filler,
 } from 'chart.js'
 import { api } from '@/api/client'
 import { emojiFor, labelFor } from '@/constants/tripTypes'
+import { TYPE_COLORS } from '@/constants/chartColors'
+import HeatmapChart from '@/components/HeatmapChart.vue'
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, Tooltip, Legend, Filler)
+ChartJS.register(CategoryScale, LinearScale, RadialLinearScale, BarElement, PointElement, LineElement, Tooltip, Legend, Filler)
 
 const data = ref<any>(null)
 const loading = ref(true)
 const error = ref('')
-
-const TYPE_COLORS: Record<string, string> = {
-  text: '#60a5fa', sticker: '#f472b6', image: '#34d399',
-  video: '#fb923c', audio: '#a78bfa', file: '#94a3b8',
-}
 
 const MONTH_LABELS = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月']
 
@@ -177,6 +221,51 @@ const seasonBarData = computed(() => {
 })
 
 const seasonOptions = { responsive: true, plugins: { legend: { display: false } } }
+
+const HEALTH_LABELS: Record<string, string> = {
+  activity: '活躍度', diversity: '多樣性', sentiment: '正面情緒', participation: '參與度',
+}
+
+const healthRadarData = computed(() => {
+  const h = data.value?.health
+  if (!h) return { labels: [], datasets: [] }
+  const keys = ['activity', 'diversity', 'sentiment', 'participation']
+    .filter((k) => h[k] !== null && h[k] !== undefined)
+  return {
+    labels: keys.map((k) => HEALTH_LABELS[k]),
+    datasets: [{
+      data: keys.map((k) => h[k]),
+      borderColor: '#6366f1',
+      backgroundColor: 'rgba(99,102,241,0.18)',
+      pointBackgroundColor: '#6366f1',
+      borderWidth: 2,
+    }],
+  }
+})
+
+const healthRadarOptions = {
+  responsive: true,
+  plugins: { legend: { display: false } },
+  scales: { r: { min: 0, max: 100, ticks: { stepSize: 25, display: false }, pointLabels: { font: { size: 11 } } } },
+}
+
+const weekly = computed(() => data.value?.weekly_trend || null)
+
+const weeklyBarData = computed(() => {
+  const w = weekly.value
+  if (!w) return { labels: [], datasets: [] }
+  return {
+    labels: w.weeks.map((r: any) => r.week.split('-')[1] ? `W${r.week.split('-')[1]}` : r.week),
+    datasets: [{
+      data: w.weeks.map((r: any) => r.count),
+      backgroundColor: w.weeks.map((_: any, i: number) =>
+        i === w.weeks.length - 1 ? '#0ea5e9' : '#bae6fd'),
+      borderRadius: 4,
+    }],
+  }
+})
+
+const weeklyOptions = { responsive: true, plugins: { legend: { display: false } } }
 
 onMounted(async () => {
   try { data.value = await api.dashboard() }

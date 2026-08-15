@@ -31,7 +31,9 @@ THEME_KEYWORDS: list[tuple[str, str]] = [
 ]
 
 def compute_badge_emoji(trip: dict, rarity: str = "") -> str:
-    """依旅程標題、地點或類型產生生動的主題 emoji。"""
+    """優先使用自訂 custom_emoji，否則依旅程標題、地點或類型產生主題 emoji。"""
+    if trip.get("custom_emoji"):
+        return trip["custom_emoji"]
     title = trip.get("title") or ""
     location = trip.get("location") or ""
     types = trip.get("trip_type") or ""

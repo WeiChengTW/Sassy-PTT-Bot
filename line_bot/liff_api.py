@@ -12,7 +12,9 @@ from travel.badges import award_badges_for_trip
 from travel.stats_extended import (
     get_leaderboard_data, get_interaction_data,
     get_topics_data, get_profile_data, get_profile_extras,
+    get_pulse_data, get_compare_data,
 )
+from travel.leaderboards import get_all_boards
 
 liff_bp = Blueprint("liff", __name__, url_prefix="/liff")
 
@@ -148,10 +150,11 @@ def _resolve_group_id(user_id: str, group_id: str) -> str:
                 "SELECT group_id FROM messages GROUP BY group_id ORDER BY COUNT(*) DESC LIMIT 1"
             ).fetchone()
         return row[0] if row else group_id
-    # 一般成員：只有在確實屬於傳入的 group_id 時才採用它；否則退回其最活躍群組。
-    # 這能同時處理「群組外開啟（空）」與「1:1/rich menu 情境傳來的 utouId（UUID）」等
-    # 非本人群組的情況——LIFF getContext 在非群組聊天不提供真正的 groupId。
-    if user_id and (not group_id or not _is_member(user_id, group_id)):
+    # 一般成員：僅在「無群組情境」（group_id 為空，例如 1:1／rich menu 開啟）時
+    # 才退回其最活躍群組。若明確帶入某群組，一律採用該值、交由 _require_member 驗證；
+    # 非該群成員即回 403，避免以他群 group_id 跨群存取。
+    # （前端 auth store 已用 /^C[0-9a-f]{32}$/ 過濾，非群組情境只會送空字串。）
+    if user_id and not group_id:
         with get_conn() as conn:
             row = conn.execute(
                 """SELECT group_id FROM messages WHERE user_id=?
@@ -215,17 +218,17 @@ def trips():
 @liff_bp.route("/trips/<trip_id>")
 def trip_detail(trip_id):
     user_id = _get_liff_user_id()
+    group_id = _resolve_group_id(user_id, _get_liff_group_id())
+    err = _require_member(user_id, group_id)
+    if err:
+        return err
     data = get_trip_detail(trip_id)
     trip = data.get("trip", {})
     if not trip or not trip.get("id"):
         return jsonify({"error": "not_found"}), 404
-    trip_group_id = trip.get("group_id")
-    # 以 trip 所屬群組驗證成員資格：admin 會 bypass（且 ?g= 群組切換一致），
-    # 一般成員必須是該群成員。
-    if trip_group_id:
-        err = _require_member(user_id, trip_group_id)
-        if err:
-            return err
+    # 只能存取「目前瀏覽群組」所屬的 trip；admin 可跨群（?g= 群組切換一致）。
+    if not _is_admin(user_id) and trip.get("group_id") != group_id:
+        return _forbid("cross_group")
     return jsonify(data)
 
 
@@ -251,12 +254,22 @@ def admin_create_trip():
         return _forbid("not_admin")
     body = request.get_json() or {}
     group_id = body.get("group_id") or _resolve_group_id(user_id, _get_liff_group_id())
+    start_date = body.get("start_date", 0)
+    end_date = body.get("end_date")
+    if end_date is not None:
+        try:
+            end_date = int(end_date)
+        except (ValueError, TypeError):
+            end_date = None
+
     trip_id = create_trip(
         group_id=group_id,
         title=body.get("title", ""),
         location=body.get("location", ""),
-        start_date=body.get("start_date", 0),
+        start_date=start_date,
+        end_date=end_date,
         trip_types=body.get("types", body.get("type")),
+        custom_emoji=body.get("custom_emoji"),
         created_by=user_id,
     )
     return jsonify({"trip_id": trip_id, "status": "planning"})
@@ -269,12 +282,31 @@ def admin_update_trip(trip_id):
         return _forbid("not_admin")
     body = request.get_json() or {}
     from travel.trip_crud import update_trip
+
+    start_date_raw = body.get("start_date")
+    end_date_raw = body.get("end_date")
+    try:
+        start_date = int(start_date_raw) if start_date_raw is not None else None
+    except (ValueError, TypeError):
+        start_date = None
+    if end_date_raw is None:
+        end_date = None
+    else:
+        try:
+            end_date = int(end_date_raw)
+        except (ValueError, TypeError):
+            end_date = None
+
     try:
         result = update_trip(
             trip_id,
             title=body.get("title"),
             location=body.get("location"),
             rarity=body.get("rarity"),
+            trip_types=body.get("types", body.get("trip_types")),
+            custom_emoji=body.get("custom_emoji"),
+            start_date=start_date,
+            end_date=end_date,
         )
         return jsonify(result)
     except ValueError as e:
@@ -421,6 +453,17 @@ def leaderboard():
     return jsonify(get_leaderboard_data(group_id, request.args.get("period", "all")))
 
 
+@liff_bp.route("/leaderboards")
+def leaderboards():
+    """資料驅動排行榜（15 種）。與舊 /leaderboard 並存。"""
+    user_id = _get_liff_user_id()
+    group_id = _resolve_group_id(user_id, _get_liff_group_id())
+    err = _require_member(user_id, group_id)
+    if err:
+        return err
+    return jsonify(get_all_boards(group_id, request.args.get("period", "all")))
+
+
 @liff_bp.route("/interactions")
 def interactions():
     user_id = _get_liff_user_id()
@@ -452,3 +495,27 @@ def profile(target_user_id: str):
         **get_profile_data(target_user_id, group_id, period),
         **get_profile_extras(target_user_id, group_id, period),
     })
+
+
+@liff_bp.route("/pulse")
+def pulse():
+    user_id = _get_liff_user_id()
+    group_id = _resolve_group_id(user_id, _get_liff_group_id())
+    err = _require_member(user_id, group_id)
+    if err:
+        return err
+    return jsonify(get_pulse_data(group_id, request.args.get("period", "all")))
+
+
+@liff_bp.route("/compare")
+def compare():
+    user_id = _get_liff_user_id()
+    group_id = _resolve_group_id(user_id, _get_liff_group_id())
+    err = _require_member(user_id, group_id)
+    if err:
+        return err
+    a = request.args.get("a", "").strip()
+    b = request.args.get("b", "").strip()
+    if not a or not b:
+        return jsonify({"error": "missing_users", "reason": "需要 a 與 b 兩個 user_id"}), 400
+    return jsonify(get_compare_data(group_id, a, b, request.args.get("period", "all")))

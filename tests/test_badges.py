@@ -68,7 +68,7 @@ def test_compute_badge_emoji_beach(db):
     from travel.badges import compute_badge_emoji
     trip = {"location": "墾丁海邊"}
     emoji = compute_badge_emoji(trip, "epic")
-    assert emoji == "🏖️🟣"
+    assert emoji == "🏖️🔴"
 
 
 def test_compute_badge_emoji_fallback(db):

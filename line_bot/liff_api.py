@@ -18,6 +18,37 @@ liff_bp = Blueprint("liff", __name__, url_prefix="/liff")
 
 # token → (user_id, expiry_epoch)
 _token_cache: dict[str, tuple[str, float]] = {}
+
+# group_id → (name, expiry_epoch)
+_group_name_cache: dict[str, tuple[str, float]] = {}
+_GROUP_NAME_TTL = 3600  # 1 hour
+
+
+def _get_group_name(group_id: str) -> str:
+    """Fetch group name from LINE API, cached for 1 hour."""
+    import json as _json
+    token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
+    if not token or not group_id:
+        return group_id
+
+    now = time.time()
+    cached = _group_name_cache.get(group_id)
+    if cached and cached[1] > now:
+        return cached[0]
+
+    try:
+        req = urllib.request.Request(
+            f"https://api.line.me/v2/bot/group/{group_id}/summary",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            body = _json.loads(resp.read())
+        name = body.get("groupName", group_id)
+    except Exception:
+        name = group_id
+
+    _group_name_cache[group_id] = (name, now + _GROUP_NAME_TTL)
+    return name
 _TOKEN_TTL = 300  # seconds
 
 
@@ -103,16 +134,32 @@ def _forbid(reason: str):
 
 
 def _resolve_group_id(user_id: str, group_id: str) -> str:
-    """For admins with no group_id header, fall back to the most active group."""
-    if group_id:
-        return group_id
+    """For admins: use ?g= override if given, else most active group.
+    For regular users: use LIFF group context; if opened outside a group
+    (no context), fall back to the user's own most-active group.
+    """
+    from travel.db import get_conn
     if _is_admin(user_id):
-        from travel.db import get_conn
+        override = request.args.get("g", "").strip()
+        if override:
+            return override
         with get_conn() as conn:
             row = conn.execute(
                 "SELECT group_id FROM messages GROUP BY group_id ORDER BY COUNT(*) DESC LIMIT 1"
             ).fetchone()
-        return row[0] if row else ""
+        return row[0] if row else group_id
+    # 一般成員：只有在確實屬於傳入的 group_id 時才採用它；否則退回其最活躍群組。
+    # 這能同時處理「群組外開啟（空）」與「1:1/rich menu 情境傳來的 utouId（UUID）」等
+    # 非本人群組的情況——LIFF getContext 在非群組聊天不提供真正的 groupId。
+    if user_id and (not group_id or not _is_member(user_id, group_id)):
+        with get_conn() as conn:
+            row = conn.execute(
+                """SELECT group_id FROM messages WHERE user_id=?
+                   GROUP BY group_id ORDER BY COUNT(*) DESC LIMIT 1""",
+                (user_id,),
+            ).fetchone()
+        if row:
+            return row[0]
     return group_id
 
 
@@ -149,7 +196,9 @@ def dashboard():
     if err:
         return err
     days = int(request.args.get("days", 30))
-    data = get_dashboard_data(group_id, days)
+    period = request.args.get("period", "all")
+    data = get_dashboard_data(group_id, days, period)
+    data["group_name"] = _get_group_name(group_id)
     return jsonify(data)
 
 
@@ -166,11 +215,13 @@ def trips():
 @liff_bp.route("/trips/<trip_id>")
 def trip_detail(trip_id):
     user_id = _get_liff_user_id()
-    group_id = _get_liff_group_id()
     data = get_trip_detail(trip_id)
     trip_group_id = data.get("trip", {}).get("group_id")
-    if trip_group_id != group_id:
-        return _forbid("cross_group")
+    if not trip_group_id:
+        return jsonify({"error": "not_found"}), 404
+    # 以 trip 所屬群組驗證成員資格：admin 會 bypass（且 ?g= 群組切換一致），
+    # 一般成員必須是該群成員。取代先前過嚴的 context 相等檢查（會讓 admin
+    # 用 ?g= 瀏覽時點進旅程被誤判 cross_group）。
     err = _require_member(user_id, trip_group_id)
     if err:
         return err
@@ -203,7 +254,7 @@ def admin_create_trip():
         title=body.get("title", ""),
         location=body.get("location", ""),
         start_date=body.get("start_date", 0),
-        trip_type=body.get("type"),
+        trip_types=body.get("types", body.get("type")),
         created_by=user_id,
     )
     return jsonify({"trip_id": trip_id, "status": "planning"})
@@ -237,6 +288,82 @@ def admin_award_badges(trip_id):
     return jsonify({"awarded": awarded})
 
 
+@liff_bp.route("/admin/groups")
+def admin_groups():
+    user_id = _get_liff_user_id()
+    if not _is_admin(user_id):
+        return _forbid("not_admin")
+    from travel.db import get_conn
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT group_id, COUNT(*) AS msg_count FROM messages GROUP BY group_id ORDER BY msg_count DESC"
+        ).fetchall()
+    groups = [{"group_id": r["group_id"], "msg_count": r["msg_count"],
+               "name": _get_group_name(r["group_id"])} for r in rows]
+    return jsonify(groups)
+
+
+@liff_bp.route("/admin/members")
+def admin_members():
+    """回傳群組成員名單（seed 過的 members 表 + 尚未入表的 messages 送信者）。"""
+    user_id = _get_liff_user_id()
+    if not _is_admin(user_id):
+        return _forbid("not_admin")
+    group_id = _resolve_group_id(user_id, _get_liff_group_id())
+    from travel.db import get_conn
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT user_id, display_name, source, resolved
+               FROM members WHERE group_id=?""",
+            (group_id,),
+        ).fetchall()
+        members = [dict(r) for r in rows]
+        known = {m["user_id"] for m in members}
+        # 安全網：把已說話但不在 members 表的送信者補進來。
+        senders = conn.execute(
+            """SELECT user_id, user_name, COUNT(*) AS msg_count
+               FROM messages WHERE group_id=? AND user_name IS NOT NULL
+               GROUP BY user_id ORDER BY msg_count DESC""",
+            (group_id,),
+        ).fetchall()
+    for s in senders:
+        if s["user_id"] not in known:
+            members.append({
+                "user_id": s["user_id"],
+                "display_name": s["user_name"],
+                "source": "auto",
+                "resolved": 1,
+            })
+    members.sort(key=lambda m: m["display_name"] or "")
+    return jsonify(members)
+
+
+@liff_bp.route("/periods")
+def periods():
+    """回傳目前 group 有資料的年 / 年月清單，供前端時間篩選。"""
+    user_id = _get_liff_user_id()
+    group_id = _resolve_group_id(user_id, _get_liff_group_id())
+    err = _require_member(user_id, group_id)
+    if err:
+        return err
+    from travel.db import get_conn
+    with get_conn() as conn:
+        year_rows = conn.execute(
+            """SELECT DISTINCT strftime('%Y', timestamp/1000,'unixepoch') AS y
+               FROM messages WHERE group_id=? ORDER BY y DESC""",
+            (group_id,),
+        ).fetchall()
+        month_rows = conn.execute(
+            """SELECT DISTINCT strftime('%Y-%m', timestamp/1000,'unixepoch') AS m
+               FROM messages WHERE group_id=? ORDER BY m DESC""",
+            (group_id,),
+        ).fetchall()
+    return jsonify({
+        "years": [r["y"] for r in year_rows if r["y"]],
+        "months": [r["m"] for r in month_rows if r["m"]],
+    })
+
+
 # ── Phase 3 分析 endpoints ───────────────────────────────────────────────────
 
 @liff_bp.route("/leaderboard")
@@ -246,7 +373,7 @@ def leaderboard():
     err = _require_member(user_id, group_id)
     if err:
         return err
-    return jsonify(get_leaderboard_data(group_id))
+    return jsonify(get_leaderboard_data(group_id, request.args.get("period", "all")))
 
 
 @liff_bp.route("/interactions")
@@ -256,7 +383,7 @@ def interactions():
     err = _require_member(user_id, group_id)
     if err:
         return err
-    return jsonify(get_interaction_data(group_id))
+    return jsonify(get_interaction_data(group_id, request.args.get("period", "all")))
 
 
 @liff_bp.route("/topics")
@@ -266,7 +393,7 @@ def topics():
     err = _require_member(user_id, group_id)
     if err:
         return err
-    return jsonify(get_topics_data(group_id))
+    return jsonify(get_topics_data(group_id, request.args.get("period", "all")))
 
 
 @liff_bp.route("/profile/<target_user_id>")
@@ -275,4 +402,4 @@ def profile(target_user_id: str):
     group_id = _resolve_group_id(requester, _get_liff_group_id())
     if not _is_admin(requester) and requester != target_user_id:
         return _forbid("not_self_or_admin")
-    return jsonify(get_profile_data(target_user_id, group_id))
+    return jsonify(get_profile_data(target_user_id, group_id, request.args.get("period", "all")))

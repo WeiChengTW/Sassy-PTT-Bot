@@ -19,14 +19,17 @@
                class="w-full border rounded-lg px-3 py-2 text-sm" />
       </div>
       <div>
-        <label class="block text-sm font-medium mb-1">類型</label>
-        <select v-model="form.tripType" class="w-full border rounded-lg px-3 py-2 text-sm">
-          <option value="">請選擇</option>
-          <option value="beach">海灘</option>
-          <option value="mountain">山岳</option>
-          <option value="city">城市</option>
-          <option value="other">其他</option>
-        </select>
+        <label class="block text-sm font-medium mb-1">類型（可複選）</label>
+        <div class="flex flex-wrap gap-2">
+          <button v-for="t in TRIP_TYPES" :key="t.value" type="button"
+                  @click="toggleType(t.value)"
+                  class="rounded-full px-3 py-1.5 text-sm border transition-colors"
+                  :class="form.types.includes(t.value)
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-gray-100 text-gray-600 border-gray-200'">
+            {{ t.emoji }} {{ t.label }}
+          </button>
+        </div>
       </div>
       <div class="flex gap-2 pt-2">
         <button type="submit" :disabled="loading"
@@ -45,11 +48,18 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '@/api/client'
+import { TRIP_TYPES } from '@/constants/tripTypes'
 
 const router = useRouter()
 const loading = ref(false)
 const error = ref('')
-const form = ref({ title: '', location: '', startDate: '', tripType: '' })
+const form = ref({ title: '', location: '', startDate: '', types: [] as string[] })
+
+function toggleType(value: string) {
+  const i = form.value.types.indexOf(value)
+  if (i >= 0) form.value.types.splice(i, 1)
+  else form.value.types.push(value)
+}
 
 async function submit() {
   loading.value = true
@@ -60,7 +70,7 @@ async function submit() {
       title: form.value.title,
       location: form.value.location,
       start_date: startDate,
-      type: form.value.tripType || null,
+      types: form.value.types,
     })
     router.push(`/admin/trips/${res.trip_id}`)
   } catch (e: any) {

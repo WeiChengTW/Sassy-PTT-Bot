@@ -331,6 +331,10 @@ class SassyBrain:
                 )
                 logger.info("[ANNIVERSARY] 每日 10:00 旅行週年提醒排程已啟動")
 
+                # 方案 D：週報／月報自動排程「暫不啟用」（資料量足夠再開）。
+                # 目前改由管理員手動觸發：群組內輸入「/stats 推播週」或「/stats 推播月」。
+                # 需自動化時，把 _push_stats_reports 掛回 cron job 即可（週一 08:00 / 每月 1 號）。
+
             self._scheduler.start()
             logger.info(f"[GRADUATION] 排程已啟動，目標群組: {LINE_GROUP_ID}，畢業日: {GRADUATION_DATE}")
         else:
@@ -390,6 +394,141 @@ class SassyBrain:
             logger.info(f"[LIFF] Flex button 回覆成功 role={role}")
         except Exception as e:
             logger.error(f"[LIFF] Flex button 回覆失敗: {e}")
+
+    # ── 統計指令（方案 A/B/C） ────────────────────────────────────────────
+
+    def _resolve_command_group(self, event) -> str | None:
+        """指令的目標群組：群組直接用 source.group_id；私訊則取該用戶最活躍的群組。"""
+        gid = getattr(event.source, "group_id", None)
+        if gid:
+            return gid
+        user_id = getattr(event.source, "user_id", None)
+        if not user_id:
+            return None
+        try:
+            from travel.db import get_conn
+            with get_conn() as conn:
+                row = conn.execute(
+                    "SELECT group_id FROM messages WHERE user_id=? AND group_id != 'dm' "
+                    "GROUP BY group_id ORDER BY COUNT(*) DESC LIMIT 1",
+                    (user_id,),
+                ).fetchone()
+            return row["group_id"] if row else None
+        except Exception as e:
+            logger.warning(f"[STATS] 解析指令群組失敗: {e}")
+            return None
+
+    def _handle_stats_command(self, event, clean_text: str) -> bool:
+        """比對統計指令並回覆 Flex。回傳 True 代表已處理（呼叫端應 return）。"""
+        if not self.line_api:
+            return False
+        text = (clean_text or "").strip()
+        low = text.lower()
+
+        is_personal = text in ("我的戰績", "我的战绩") or low in ("/me", "戰績")
+        is_stats = (
+            text in ("統計", "戰報", "群組戰報")
+            or low in ("stats", "/stats", "/統計")
+            or low.startswith("/stats")
+        )
+        if not (is_personal or is_stats):
+            return False
+
+        group_id = self._resolve_command_group(event)
+        if not group_id:
+            self._reply_text(event, "找不到可統計的群組資料 🤔（請在群組內使用）")
+            return True
+
+        try:
+            import line_bot.stats_cards as cards
+            from travel.stats import get_dashboard_data, get_user_badges
+            from travel.stats_extended import (
+                get_leaderboard_data, get_interaction_data,
+                get_topics_data, get_profile_data,
+            )
+
+            if is_personal:
+                user_id = getattr(event.source, "user_id", "") or ""
+                name = self._get_sender_label(user_id, group_id=group_id)
+                profile = get_profile_data(user_id, group_id, "all")
+                badges = get_user_badges(user_id, group_id)
+                inter = get_interaction_data(group_id, "all")
+                best_friend = cards.best_friend_of(inter, user_id)
+                msg = cards.build_personal_card(profile, badges, best_friend,
+                                                name, LIFF_URL, user_id)
+                self._reply_flex(event, msg)
+                return True
+
+            # /stats 子指令
+            arg = low.replace("/stats", "").replace("統計", "").replace("戰報", "").strip()
+            # 管理員手動推播週報／月報（方案 D，暫代自動排程）
+            if arg in ("推播週", "推播周", "push週", "push周", "pushweek", "推週報"):
+                self._admin_push_report(event, "7d", "本週")
+            elif arg in ("推播月", "push月", "pushmonth", "推月報"):
+                self._admin_push_report(event, "30d", "本月")
+            elif arg in ("排行", "發言排行", "leaderboard", "rank"):
+                bubble = cards.build_leaderboard_card(get_leaderboard_data(group_id, "all"), LIFF_URL)
+                self._reply_flex(event, cards.wrap_single(bubble, "🏆 發言排行"))
+            elif arg in ("夜貓", "夜貓榜", "nightowl", "owl"):
+                bubble = cards.build_nightowl_card(get_leaderboard_data(group_id, "all"), LIFF_URL)
+                self._reply_flex(event, cards.wrap_single(bubble, "🦉 夜貓榜"))
+            elif arg in ("cp", "最佳cp", "pair", "羈絆"):
+                bubble = cards.build_pairs_card(get_interaction_data(group_id, "all"), LIFF_URL)
+                self._reply_flex(event, cards.wrap_single(bubble, "💞 最佳 CP"))
+            elif arg in ("話題", "熱門話題", "topic", "topics", "關鍵字"):
+                bubble = cards.build_topics_card(get_topics_data(group_id, "all"), LIFF_URL)
+                self._reply_flex(event, cards.wrap_single(bubble, "🔥 熱門話題"))
+            else:
+                # 無子指令 → 近 30 天摘要輪播 + Quick Reply
+                carousel = cards.build_report_carousel(
+                    get_dashboard_data(group_id, period="30d"),
+                    get_leaderboard_data(group_id, "30d"),
+                    get_interaction_data(group_id, "30d"),
+                    get_topics_data(group_id, "30d"),
+                    LIFF_URL, "近 30 天",
+                )
+                carousel.quick_reply = cards.stats_quick_reply(LIFF_URL)
+                self._reply_flex(event, carousel)
+            return True
+        except Exception as e:
+            logger.error(f"[STATS] 指令處理失敗: {e}")
+            self._reply_text(event, "統計功能暫時出了點狀況 🛠️")
+            return True
+
+    def _admin_push_report(self, event, period: str, label: str) -> None:
+        """管理員手動觸發：把戰報 Carousel 推播到目標群組。非管理員拒絕。"""
+        sender_id = getattr(event.source, "user_id", "") or ""
+        admin_ids = {
+            uid.strip() for uid in os.getenv("ADMIN_USER_IDS", "").split(",") if uid.strip()
+        }
+        if sender_id not in admin_ids:
+            self._reply_text(event, "這個指令只有管理員能用喔 🔒")
+            return
+        # 背景推播（推播可能對多群組、較耗時），先回覆確認避免 reply_token 過期
+        self._reply_text(event, f"開始推播「{label}」戰報… 📤")
+        threading.Thread(
+            target=lambda: self._push_stats_reports(period, label), daemon=True
+        ).start()
+
+    def _reply_text(self, event, text: str) -> None:
+        try:
+            self.line_api.reply_message(
+                ReplyMessageRequest(reply_token=event.reply_token,
+                                    messages=[LineTextMessage(text=text)]),
+                _request_timeout=_LINE_API_TIMEOUT,
+            )
+        except Exception as e:
+            logger.error(f"[STATS] 文字回覆失敗: {e}")
+
+    def _reply_flex(self, event, flex_msg) -> None:
+        try:
+            self.line_api.reply_message(
+                ReplyMessageRequest(reply_token=event.reply_token, messages=[flex_msg]),
+                _request_timeout=_LINE_API_TIMEOUT,
+            )
+            logger.info("[STATS] Flex 回覆成功")
+        except Exception as e:
+            logger.error(f"[STATS] Flex 回覆失敗: {e}")
 
     def handle_line_event(self, event):
         """同步 LINE 事件處理（Flask 呼叫，用 asyncio.run 橋接非同步）。"""
@@ -468,6 +607,10 @@ class SassyBrain:
             sender_user_id,
             group_id=getattr(event.source, 'group_id', None),
         )
+
+        # 統計指令（方案 A/B/C）：在 LLM 觸發判斷之前攔截
+        if self._handle_stats_command(event, clean_text):
+            return
 
         # ★ 1. 不管有沒有觸發，都先把 user 訊息寫進歷史
         self._record_turn(line_chat_id, sender, clean_text, "user")
@@ -891,6 +1034,61 @@ class SassyBrain:
                 logger.info(f"[ANNIVERSARY] 推送週年提醒 trip={trip['id']} group={group_id}")
             except Exception as e:
                 logger.warning(f"[ANNIVERSARY] 推送失敗 trip={trip['id']}: {e}")
+
+    def _stats_push_targets(self, period: str) -> list[str]:
+        """決定要推播戰報的群組：優先 PUSH_GROUP_IDS 環境變數，否則取近期有發言的群組。"""
+        env_ids = [g.strip() for g in os.getenv("PUSH_GROUP_IDS", "").split(",") if g.strip()]
+        if env_ids:
+            return env_ids
+        try:
+            from travel.db import get_conn
+            from travel.period import period_filter
+            pf, pp = period_filter(period)
+            with get_conn() as conn:
+                rows = conn.execute(
+                    f"SELECT group_id FROM messages WHERE group_id != 'dm'{pf} "
+                    f"GROUP BY group_id HAVING COUNT(*) >= 10",
+                    pp,
+                ).fetchall()
+            return [r["group_id"] for r in rows]
+        except Exception as e:
+            logger.warning(f"[STATS_PUSH] 取得推播群組失敗: {e}")
+            return [LINE_GROUP_ID] if LINE_GROUP_ID else []
+
+    def _push_stats_reports(self, period: str, period_label: str):
+        """方案 D：定時推播群組戰報 Carousel 到綁定 / 活躍群組。"""
+        if not self.line_api:
+            return
+        try:
+            import line_bot.stats_cards as cards
+            from travel.stats import get_dashboard_data
+            from travel.stats_extended import (
+                get_leaderboard_data, get_interaction_data, get_topics_data,
+            )
+        except Exception as e:
+            logger.error(f"[STATS_PUSH] 模組載入失敗: {e}")
+            return
+
+        targets = self._stats_push_targets(period)
+        if not targets:
+            logger.info("[STATS_PUSH] 無可推播群組，跳過")
+            return
+        for gid in targets:
+            try:
+                carousel = cards.build_report_carousel(
+                    get_dashboard_data(gid, period=period),
+                    get_leaderboard_data(gid, period),
+                    get_interaction_data(gid, period),
+                    get_topics_data(gid, period),
+                    LIFF_URL, period_label,
+                )
+                self.line_api.push_message(
+                    PushMessageRequest(to=gid, messages=[carousel]),
+                    _request_timeout=10.0,
+                )
+                logger.info(f"[STATS_PUSH] 已推播{period_label}戰報 group={gid}")
+            except Exception as e:
+                logger.warning(f"[STATS_PUSH] 推播失敗 group={gid}: {e}")
 
     def _watchdog_graduation_push(self):
         """09:05 補推 watchdog：若今日 state 不是 success/in_progress，重跑整個流程。"""

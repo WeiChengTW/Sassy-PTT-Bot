@@ -3,12 +3,26 @@ const API_BASE = '/liff'
 let _userId = ''
 let _groupId = ''
 let _idToken = ''
+let _adminGroup = localStorage.getItem('adminGroup') || ''
+let _period = localStorage.getItem('period') || 'all'
 
 export function setLiffContext(userId: string, groupId: string, idToken = '') {
   _userId = userId
   _groupId = groupId
   _idToken = idToken
 }
+
+export function setAdminGroup(groupId: string) {
+  _adminGroup = groupId
+  localStorage.setItem('adminGroup', groupId)
+}
+export function getAdminGroup() { return _adminGroup }
+
+export function setPeriod(period: string) {
+  _period = period
+  localStorage.setItem('period', period)
+}
+export function getPeriod() { return _period }
 
 async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
@@ -18,8 +32,19 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
     ...(_idToken ? { Authorization: `Bearer ${_idToken}` } : {}),
     ...((opts.headers as Record<string, string>) || {}),
   }
-  const res = await fetch(`${API_BASE}${path}`, { ...opts, headers })
-  if (!res.ok) throw new Error(`API error ${res.status}`)
+  // Merge existing query with injected params
+  const [base, existing] = path.split('?')
+  const qs = new URLSearchParams(existing || '')
+  if (_adminGroup) qs.set('g', _adminGroup)
+  if (_period && _period !== 'all') qs.set('period', _period)
+  const query = qs.toString()
+  const fullPath = query ? `${base}?${query}` : base
+  const res = await fetch(`${API_BASE}${fullPath}`, { ...opts, headers })
+  if (!res.ok) {
+    let reason = ''
+    try { const j = await res.json(); reason = j.reason || j.error || '' } catch {}
+    throw new Error(reason ? `${res.status}: ${reason}` : `API error ${res.status}`)
+  }
   return res.json() as Promise<T>
 }
 
@@ -38,4 +63,7 @@ export const api = {
   interactions: () => req<any>('/interactions'),
   topics: () => req<any>('/topics'),
   profile: (userId: string) => req<any>(`/profile/${userId}`),
+  adminGroups: () => req<any[]>('/admin/groups'),
+  adminMembers: () => req<{ user_id: string; display_name: string; source: string; resolved: number }[]>('/admin/members'),
+  periods: () => req<{ years: string[]; months: string[] }>('/periods'),
 }

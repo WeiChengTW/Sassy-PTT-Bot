@@ -50,6 +50,16 @@
   animation: glow-pulse 2.5s ease-in-out infinite;
 }
 
+/* ── Epic badge pulse ─────────────────────────────────────────── */
+@keyframes glow-pulse-epic {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.4); }
+  50%       { box-shadow: 0 0 12px 4px rgba(244, 63, 94, 0.22); }
+}
+
+.badge-epic {
+  animation: glow-pulse-epic 2.5s ease-in-out infinite;
+}
+
 /* ── Reduced motion ───────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   .page-enter-active,
@@ -63,7 +73,8 @@
     animation: none;
     background: #e2e8f0;
   }
-  .badge-legendary {
+  .badge-legendary,
+  .badge-epic {
     animation: none;
   }
 }

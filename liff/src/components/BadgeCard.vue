@@ -34,62 +34,12 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { rarityOf } from '@/constants/rarity'
 
 const props = defineProps<{ badge: any }>()
 
-type Rarity = 'common' | 'rare' | 'epic' | 'legendary'
-
-const RARITY_STYLES: Record<Rarity, {
-  card: string; icon: string; name: string; pill: string; date: string; dot: string
-}> = {
-  common: {
-    card: 'bg-white border-gray-200',
-    icon: 'bg-gray-100',
-    name: 'text-gray-800',
-    pill: 'bg-gray-100 text-gray-500',
-    date: 'text-gray-400',
-    dot: 'bg-gray-300',
-  },
-  rare: {
-    card: 'bg-blue-50 border-blue-200',
-    icon: 'bg-blue-100',
-    name: 'text-blue-900',
-    pill: 'bg-blue-100 text-blue-600',
-    date: 'text-blue-400',
-    dot: 'bg-blue-400',
-  },
-  epic: {
-    card: 'bg-purple-50 border-purple-300',
-    icon: 'bg-purple-100',
-    name: 'text-purple-900',
-    pill: 'bg-purple-100 text-purple-600',
-    date: 'text-purple-400',
-    dot: 'bg-purple-500',
-  },
-  legendary: {
-    card: 'bg-amber-50 border-amber-300 badge-legendary',
-    icon: 'bg-amber-100',
-    name: 'text-amber-900',
-    pill: 'bg-amber-100 text-amber-600',
-    date: 'text-amber-400',
-    dot: 'bg-amber-400',
-  },
-}
-
-const RARITY_LABEL: Record<Rarity, string> = {
-  common: '一般',
-  rare: '✦ 稀有',
-  epic: '✦✦ 史詩',
-  legendary: '★ 傳說',
-}
-
-const rarity = computed<Rarity>(() => {
-  const r = props.badge.badge_rarity as Rarity
-  return RARITY_STYLES[r] ? r : 'common'
-})
-
-const rarityStyle = computed(() => RARITY_STYLES[rarity.value])
-const rarityLabel = computed(() => RARITY_LABEL[rarity.value])
+const rarityStyle = computed(() => rarityOf(props.badge.badge_rarity))
+const rarityLabel = computed(() => `${rarityStyle.value.emoji} ${rarityStyle.value.zh}`)
 const earnedDate = computed(() => {
   if (!props.badge.earned_at) return ''
   return new Date(props.badge.earned_at * 1000).toLocaleDateString('zh-TW')

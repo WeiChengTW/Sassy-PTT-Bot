@@ -18,22 +18,26 @@ LOCATION_EMOJI: list[tuple[str, str]] = [
     ("夜市", "🌃"), ("台北", "🌃"), ("城市", "🌃"),
 ]
 
+# 稀有度 5 階（common < rare < super_rare < epic < legendary）。
+# 前端對應常數在 liff/src/constants/rarity.ts —— 兩邊需手動同步。
 RARITY_CIRCLE = {
     "common": "🟢",
     "rare": "🔵",
-    "epic": "🟣",
+    "super_rare": "🟣",
+    "epic": "🔴",
     "legendary": "🟡",
 }
 
 RARITY_LABEL = {
-    "common": "初心者",
-    "rare": "旅行者",
-    "epic": "冒險家",
-    "legendary": "傳奇旅人",
+    "common": "普通",
+    "rare": "稀有",
+    "super_rare": "極稀有",
+    "epic": "史詩",
+    "legendary": "傳說",
 }
 
 
-def compute_rarity(trip: dict) -> Literal["common", "rare", "epic", "legendary"]:
+def compute_rarity(trip: dict) -> Literal["common", "rare", "super_rare", "epic", "legendary"]:
     """依旅程天數、參與人數、地點判斷稀有度。"""
     location = trip.get("location") or ""
     if any(kw in location for kw in ABROAD_KEYWORDS):
@@ -65,7 +69,7 @@ def compute_badge_emoji(trip: dict, rarity: str) -> str:
 
 def compute_badge_name(trip: dict, user_name: str, rarity: str) -> str:
     """產生徽章名稱。"""
-    label = RARITY_LABEL.get(rarity, "旅行者")
+    label = RARITY_LABEL.get(rarity, "普通")
     return f"{trip.get('title', '旅行')}・{user_name}・{label}"
 
 
@@ -103,7 +107,8 @@ def award_badges_for_trip(trip_id: str) -> list[dict]:
         return []
     participants = get_participants(trip_id)
     trip["participants_count"] = len(participants)
-    rarity = compute_rarity(trip)
+    # 優先採用事件本身指定的稀有度（歷史回憶匯入），否則自動推算。
+    rarity = trip.get("rarity") or compute_rarity(trip)
     emoji = compute_badge_emoji(trip, rarity)
     earned_at = int(time.time())
     new_badges = []

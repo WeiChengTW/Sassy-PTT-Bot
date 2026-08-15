@@ -4,6 +4,7 @@ import time
 import uuid
 
 from travel.db import get_conn
+from travel.trip_types import normalize_trip_types
 
 
 def create_trip(
@@ -11,12 +12,13 @@ def create_trip(
     title: str,
     location: str,
     start_date: int,
-    trip_type: str | None,
+    trip_types: list[str] | str | None,
     created_by: str,
 ) -> str:
-    """建立旅行，回傳 trip_id（UUID）。"""
+    """建立旅行，回傳 trip_id（UUID）。trip_types 正規化成 JSON 陣列字串儲存。"""
     trip_id = str(uuid.uuid4())
     now = int(time.time())
+    trip_type = normalize_trip_types(trip_types)
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO trips
@@ -91,9 +93,13 @@ def get_participants(trip_id: str) -> list[dict]:
     with get_conn() as conn:
         rows = conn.execute(
             """SELECT tp.user_id, tp.role, tp.joined_at, tp.messages_count,
-                      (SELECT user_name FROM messages
-                       WHERE user_id = tp.user_id AND user_name IS NOT NULL
-                       LIMIT 1) AS user_name
+                      COALESCE(
+                        (SELECT user_name FROM messages
+                         WHERE user_id = tp.user_id AND user_name IS NOT NULL
+                         LIMIT 1),
+                        (SELECT display_name FROM members
+                         WHERE user_id = tp.user_id LIMIT 1)
+                      ) AS user_name
                FROM trip_participants tp
                WHERE tp.trip_id = ?""",
             (trip_id,),

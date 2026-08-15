@@ -6,6 +6,7 @@ const router = createRouter({
   routes: [
     { path: '/', component: () => import('@/views/DashboardView.vue'), meta: { requiresParticipant: true } },
     { path: '/trips', component: () => import('@/views/TripListView.vue'), meta: { requiresParticipant: true } },
+    { path: '/timeline', component: () => import('@/views/TimelineView.vue'), meta: { requiresParticipant: true } },
     { path: '/trips/:id', component: () => import('@/views/TripDetailView.vue'), meta: { requiresParticipant: true } },
     { path: '/badges', component: () => import('@/views/BadgesView.vue'), meta: { requiresParticipant: true } },
     { path: '/admin', component: () => import('@/views/TripAdminListView.vue'), meta: { requiresAdmin: true } },

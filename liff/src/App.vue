@@ -1,5 +1,17 @@
 <template>
   <div class="min-h-screen bg-slate-50 pb-20">
+    <!-- Admin group switcher -->
+    <div v-if="auth.role === 'admin'" class="sticky top-0 z-30 bg-amber-50 border-b border-amber-200 px-4 py-2 flex items-center gap-2">
+      <span class="text-xs font-medium text-amber-700 shrink-0">🔧 群組</span>
+      <select v-model="adminGroup" @change="onAdminGroupChange"
+              class="flex-1 text-xs bg-white border border-amber-300 rounded-lg px-2 py-1.5 text-gray-700 focus:outline-none">
+        <option v-for="g in adminGroups" :key="g.group_id" :value="g.group_id">
+          {{ g.name }} ({{ g.msg_count }})
+        </option>
+      </select>
+    </div>
+    <!-- Period selector -->
+    <PeriodSelector v-if="auth.initialized" />
     <main class="p-4 max-w-lg mx-auto">
       <router-view v-slot="{ Component }">
         <transition name="page" mode="out-in">
@@ -77,17 +89,47 @@
         </button>
       </div>
     </nav>
+
+    <!-- 全域 Toast -->
+    <Toast />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, computed, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { api, setAdminGroup, getAdminGroup } from '@/api/client'
+import PeriodSelector from '@/components/PeriodSelector.vue'
+import Toast from '@/components/Toast.vue'
 
 const auth = useAuthStore()
 const route = useRoute()
+const router = useRouter()
 const showMore = ref(false)
+
+const adminGroups = ref<any[]>([])
+const adminGroup = ref('')
+
+watch(() => auth.role, async (role) => {
+  if (role !== 'admin') return
+  try {
+    adminGroups.value = await api.adminGroups()
+    if (adminGroups.value.length) {
+      // Prefer stored selection; fall back to most active
+      const stored = getAdminGroup()
+      const valid = stored && adminGroups.value.find(g => g.group_id === stored)
+      adminGroup.value = valid ? stored : adminGroups.value[0].group_id
+      setAdminGroup(adminGroup.value)
+    }
+  } catch {}
+}, { immediate: true })
+
+function onAdminGroupChange() {
+  setAdminGroup(adminGroup.value)
+  // Reload current view
+  router.go(0)
+}
 
 const primaryItems = computed(() => {
   const base = [
@@ -115,10 +157,15 @@ const primaryItems = computed(() => {
   return base
 })
 
-const moreRoutes = ['/badges', '/interactions', '/topics', '/admin']
+const moreRoutes = ['/badges', '/timeline', '/interactions', '/topics', '/admin']
 
 const moreItems = computed(() => {
   const items = [
+    {
+      to: '/timeline',
+      label: '回憶',
+      icon: 'M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z',
+    },
     {
       to: '/badges',
       label: '徽章',

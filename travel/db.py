@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS messages (
     sentiment REAL,
     locations TEXT,
     summary TEXT,
+    keywords TEXT,
     analyzed_at INTEGER,
     created_at INTEGER DEFAULT (strftime('%s','now'))
 );
@@ -36,6 +37,8 @@ CREATE INDEX IF NOT EXISTS idx_messages_travel
     ON messages(is_travel_related) WHERE is_travel_related = 1;
 CREATE INDEX IF NOT EXISTS idx_messages_unanalyzed
     ON messages(analyzed_at) WHERE analyzed_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_no_keywords
+    ON messages(analyzed_at) WHERE analyzed_at IS NOT NULL AND keywords IS NULL;
 
 CREATE TABLE IF NOT EXISTS trips (
     id TEXT PRIMARY KEY,
@@ -56,6 +59,19 @@ CREATE TABLE IF NOT EXISTS trip_participants (
     joined_at INTEGER,
     PRIMARY KEY (trip_id, user_id)
 );
+
+-- 群組成員名單。未在 messages 說過話者用合成 id 'manual:<uuid8>'，
+-- 日後說話時由 reconcile_member() 接回真實 LINE user_id。
+CREATE TABLE IF NOT EXISTS members (
+    group_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    source TEXT DEFAULT 'manual',
+    resolved INTEGER DEFAULT 0,
+    created_at INTEGER,
+    PRIMARY KEY (group_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_members_group ON members(group_id);
 
 CREATE TABLE IF NOT EXISTS badges (
     id TEXT PRIMARY KEY,
@@ -116,8 +132,14 @@ def get_conn():
 
 
 def init_db():
-    """Create all tables if not exist."""
+    """Create all tables if not exist，並套用 idempotent 欄位 migration。"""
     with get_conn() as conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")} \
+            if conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='messages'"
+            ).fetchone() else set()
+        if cols and "keywords" not in cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN keywords TEXT")
         conn.executescript(SCHEMA)
 
 
@@ -142,6 +164,65 @@ def insert_message(msg: dict) -> bool:
                     msg["timestamp"],
                 ),
             )
+        reconcile_member(msg["group_id"], msg["user_id"], msg.get("user_name"))
         return True
     except sqlite3.IntegrityError:
         return False
+
+
+def reconcile_member(group_id: str, user_id: str, user_name: str | None) -> None:
+    """成員說話時把人工新增（合成 id）的名單接回真實 LINE user_id。
+
+    Best-effort：任何錯誤都吞掉，不影響訊息寫入。
+    """
+    if not group_id or not user_id or not user_name:
+        return
+    try:
+        with get_conn() as conn:
+            row = conn.execute(
+                """SELECT user_id FROM members
+                   WHERE group_id=? AND display_name=? AND resolved=0
+                   ORDER BY created_at LIMIT 1""",
+                (group_id, user_name),
+            ).fetchone()
+            if not row:
+                return
+            synthetic = row["user_id"]
+            if synthetic == user_id:
+                # 已是真實 id，只需標記 resolved。
+                conn.execute(
+                    "UPDATE members SET resolved=1, source='auto' WHERE group_id=? AND user_id=?",
+                    (group_id, user_id),
+                )
+                return
+            # 若真實 id 已存在於 members，刪掉合成列；否則把合成列改為真實 id。
+            exists = conn.execute(
+                "SELECT 1 FROM members WHERE group_id=? AND user_id=?",
+                (group_id, user_id),
+            ).fetchone()
+            if exists:
+                conn.execute(
+                    "DELETE FROM members WHERE group_id=? AND user_id=?",
+                    (group_id, synthetic),
+                )
+                conn.execute(
+                    "UPDATE members SET resolved=1, source='auto' WHERE group_id=? AND user_id=?",
+                    (group_id, user_id),
+                )
+            else:
+                conn.execute(
+                    """UPDATE members SET user_id=?, resolved=1, source='auto'
+                       WHERE group_id=? AND user_id=?""",
+                    (user_id, group_id, synthetic),
+                )
+            # 把先前以合成 id 指派的參與者/徽章接回真實 id（忽略 unique 衝突）。
+            for table in ("trip_participants", "badges"):
+                try:
+                    conn.execute(
+                        f"UPDATE OR IGNORE {table} SET user_id=? WHERE user_id=?",
+                        (user_id, synthetic),
+                    )
+                except sqlite3.Error:
+                    pass
+    except sqlite3.Error:
+        pass

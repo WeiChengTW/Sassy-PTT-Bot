@@ -6,41 +6,60 @@
       <div class="bg-white rounded-xl shadow p-4 mb-4">
         <h1 class="text-xl font-bold">{{ detail.trip.title }}</h1>
         <p class="text-gray-500 text-sm">{{ detail.trip.location }}</p>
-        <p class="text-xs mt-1">狀態：
-          <span :class="detail.trip.status === 'ended' ? 'text-gray-400' : 'text-blue-600'">
-            {{ detail.trip.status === 'ended' ? '已結束' : '進行中' }}
+        <div class="flex items-center gap-2 text-xs mt-1">
+          <span>狀態：
+            <span :class="detail.trip.status === 'ended' ? 'text-gray-400' : 'text-blue-600'">
+              {{ detail.trip.status === 'ended' ? '已結束' : '進行中' }}
+            </span>
           </span>
-        </p>
+          <span v-if="detail.trip.rarity"
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium"
+                :class="rarity.pill">
+            {{ rarity.emoji }} {{ rarity.zh }}
+          </span>
+        </div>
       </div>
 
+      <!-- 參與人選擇：從群組名單勾選 -->
       <div class="bg-white rounded-xl shadow p-4 mb-4">
-        <h2 class="font-semibold mb-2">👥 參與者（{{ detail.participants.length }}）</h2>
-        <div class="text-sm text-gray-600 mb-3">
-          <span v-for="p in detail.participants" :key="p.user_id"
-                class="inline-block bg-gray-100 rounded-full px-2 py-0.5 text-xs mr-1 mb-1">
-            {{ p.user_name || p.user_id }}
-          </span>
+        <h2 class="font-semibold mb-3">👥 參與人（已選 {{ selected.size }}）</h2>
+        <div v-if="membersLoading" class="text-sm text-gray-400 py-2">載入名單中...</div>
+        <div v-else class="grid grid-cols-2 gap-2">
+          <label v-for="m in members" :key="m.user_id"
+                 class="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm cursor-pointer select-none"
+                 :class="selected.has(m.user_id) ? 'border-blue-400 bg-blue-50' : 'border-gray-200'">
+            <input type="checkbox" :checked="selected.has(m.user_id)"
+                   @change="toggle(m.user_id)" class="accent-blue-500" />
+            <span class="truncate" :class="m.resolved ? '' : 'text-gray-400'">
+              {{ m.display_name }}
+              <span v-if="!m.resolved" class="text-[10px]">（待接回）</span>
+            </span>
+          </label>
         </div>
-        <div v-if="detail.trip.status !== 'ended'" class="flex gap-2">
-          <input v-model="newParticipant" placeholder="LINE user_id"
-                 class="flex-1 border rounded-lg px-3 py-1.5 text-sm" />
-          <button @click="addParticipant" :disabled="addLoading"
-                  class="bg-gray-800 text-white text-sm px-3 py-1.5 rounded-lg disabled:opacity-50">
-            加入
-          </button>
-        </div>
-      </div>
 
-      <div v-if="detail.trip.status !== 'ended'" class="space-y-3">
-        <button @click="endTrip" :disabled="actionLoading"
-                class="w-full bg-orange-500 text-white rounded-xl py-3 font-medium disabled:opacity-50">
-          🏁 結束旅行
+        <button v-if="detail.trip.status !== 'ended'" @click="saveAndAward"
+                :disabled="actionLoading || selected.size === 0"
+                class="mt-4 w-full bg-purple-600 text-white rounded-xl py-3 font-medium disabled:opacity-50">
+          💾 儲存參與人並發徽章
+        </button>
+        <button v-else @click="saveParticipants"
+                :disabled="actionLoading"
+                class="mt-4 w-full bg-gray-800 text-white rounded-xl py-3 font-medium disabled:opacity-50">
+          💾 更新參與人
         </button>
       </div>
-      <div v-if="detail.trip.status === 'ended'" class="space-y-3">
-        <button @click="awardBadges" :disabled="actionLoading"
-                class="w-full bg-purple-600 text-white rounded-xl py-3 font-medium disabled:opacity-50">
-          🏅 發放徽章
+
+      <!-- 手動後備動作 -->
+      <div class="space-y-2">
+        <button v-if="detail.trip.status !== 'ended'" @click="endTrip"
+                :disabled="actionLoading"
+                class="w-full bg-orange-500 text-white rounded-xl py-2.5 text-sm font-medium disabled:opacity-50">
+          🏁 只結束旅行（不發徽章）
+        </button>
+        <button v-if="detail.trip.status === 'ended'" @click="awardBadges"
+                :disabled="actionLoading"
+                class="w-full border border-purple-300 text-purple-700 rounded-xl py-2.5 text-sm font-medium disabled:opacity-50">
+          🏅 重新發放徽章
         </button>
       </div>
 
@@ -51,42 +70,70 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '@/api/client'
+import { rarityOf } from '@/constants/rarity'
 
 const route = useRoute()
 const tripId = route.params.id as string
 
 const detail = ref<any>(null)
 const loading = ref(true)
-const addLoading = ref(false)
+const membersLoading = ref(true)
 const actionLoading = ref(false)
-const newParticipant = ref('')
+const members = ref<{ user_id: string; display_name: string; resolved: number }[]>([])
+const selected = ref<Set<string>>(new Set())
 const message = ref('')
 const error = ref('')
 
-async function load() {
-  loading.value = true
-  try { detail.value = await api.tripDetail(tripId) }
-  finally { loading.value = false }
+const rarity = computed(() => rarityOf(detail.value?.trip?.rarity))
+
+function toggle(userId: string) {
+  const s = new Set(selected.value)
+  s.has(userId) ? s.delete(userId) : s.add(userId)
+  selected.value = s
 }
 
-async function addParticipant() {
-  if (!newParticipant.value.trim()) return
-  addLoading.value = true
+async function load() {
+  loading.value = true
   try {
-    await api.adminAddParticipants(tripId, [newParticipant.value.trim()])
-    newParticipant.value = ''
+    detail.value = await api.tripDetail(tripId)
+    selected.value = new Set((detail.value?.participants || []).map((p: any) => p.user_id))
+  } finally { loading.value = false }
+}
+
+async function loadMembers() {
+  membersLoading.value = true
+  try { members.value = await api.adminMembers() }
+  catch (e: any) { error.value = e.message }
+  finally { membersLoading.value = false }
+}
+
+async function saveParticipants() {
+  message.value = ''; error.value = ''
+  await api.adminAddParticipants(tripId, [...selected.value])
+  await load()
+}
+
+async function saveAndAward() {
+  if (!confirm('儲存參與人並結束事件、發放徽章？')) return
+  actionLoading.value = true
+  message.value = ''; error.value = ''
+  try {
+    await api.adminAddParticipants(tripId, [...selected.value])
+    await api.adminEndTrip(tripId)
+    const res = await api.adminAwardBadges(tripId)
     await load()
-    message.value = '已加入'
+    message.value = `已結束並發放 ${res.awarded.length} 枚徽章`
   } catch (e: any) { error.value = e.message }
-  finally { addLoading.value = false }
+  finally { actionLoading.value = false }
 }
 
 async function endTrip() {
-  if (!confirm('確定結束旅行？')) return
+  if (!confirm('確定只結束旅行（不發徽章）？')) return
   actionLoading.value = true
+  message.value = ''; error.value = ''
   try {
     await api.adminEndTrip(tripId)
     await load()
@@ -97,6 +144,7 @@ async function endTrip() {
 
 async function awardBadges() {
   actionLoading.value = true
+  message.value = ''; error.value = ''
   try {
     const res = await api.adminAwardBadges(tripId)
     message.value = `已發放 ${res.awarded.length} 枚徽章`
@@ -104,5 +152,5 @@ async function awardBadges() {
   finally { actionLoading.value = false }
 }
 
-onMounted(load)
+onMounted(() => { load(); loadMembers() })
 </script>

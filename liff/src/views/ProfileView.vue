@@ -45,6 +45,20 @@
         </div>
       </div>
 
+      <!-- 聊天人格 -->
+      <template v-if="data.personality && data.personality.length">
+        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">你的聊天人格</h2>
+        <div class="bg-gradient-to-br from-indigo-50 to-violet-50 border border-indigo-100 rounded-2xl p-4 mb-6 space-y-2.5">
+          <div v-for="(p, i) in data.personality" :key="i" class="flex items-center gap-3">
+            <span class="text-2xl">{{ TAG_EMOJI[p.tag] || '✨' }}</span>
+            <div class="min-w-0">
+              <p class="text-sm font-bold text-indigo-800">{{ p.tag }}</p>
+              <p class="text-xs text-indigo-500">{{ p.reason }}</p>
+            </div>
+          </div>
+        </div>
+      </template>
+
       <!-- 訊息類型 -->
       <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">訊息類型</h2>
       <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-6">
@@ -110,6 +124,11 @@ const slotList = [
 const TYPE_COLORS: Record<string, string> = {
   text: '#60a5fa', sticker: '#f472b6', image: '#34d399',
   video: '#fb923c', audio: '#a78bfa', file: '#94a3b8',
+}
+
+const TAG_EMOJI: Record<string, string> = {
+  貼圖狂魔: '🎭', 攝影大師: '📸', 文字控: '⌨️', 夜貓子: '🌙',
+  日行性: '☀️', 正能量大使: '😊', 毒舌代表: '🌶️', 均衡型: '⚖️', 潛水中: '🤿',
 }
 
 const typeBarData = computed(() => {

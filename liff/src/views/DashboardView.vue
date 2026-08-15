@@ -1,6 +1,9 @@
 <template>
   <div>
-    <h1 class="text-xl font-bold mb-4 text-gray-900">群組儀表板</h1>
+    <h1 class="text-xl font-bold mb-4 text-gray-900">
+      群組儀表板
+      <span v-if="data?.group_name" class="block text-sm font-normal text-gray-400 mt-0.5">{{ data.group_name }}</span>
+    </h1>
 
     <!-- Skeleton -->
     <div v-if="loading">
@@ -54,6 +57,40 @@
         </div>
       </div>
 
+      <!-- 月成長趨勢 -->
+      <template v-if="data.monthly_trend && data.monthly_trend.length">
+        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">月成長趨勢</h2>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-3">
+          <Line :data="monthlyLineData" :options="monthlyOptions" style="max-height:180px" />
+        </div>
+        <div v-if="latestGrowth !== null" class="mb-6 text-xs text-gray-500 px-1">
+          最近一個月相對前月
+          <span :class="latestGrowth >= 0 ? 'text-emerald-600 font-semibold' : 'text-rose-500 font-semibold'">
+            {{ latestGrowth >= 0 ? '↑' : '↓' }} {{ Math.abs(latestGrowth) }}%
+          </span>
+        </div>
+      </template>
+
+      <!-- 季節性 -->
+      <template v-if="data.seasonality && data.seasonality.length">
+        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">季節性（各月合計）</h2>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-6">
+          <Bar :data="seasonBarData" :options="seasonOptions" style="max-height:160px" />
+        </div>
+      </template>
+
+      <!-- 旅行類型分佈 -->
+      <template v-if="data.trip_type_distribution && data.trip_type_distribution.length">
+        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">旅行類型分佈</h2>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-6 flex flex-wrap gap-2">
+          <span v-for="d in data.trip_type_distribution" :key="d.type"
+                class="inline-flex items-center gap-1 rounded-full bg-violet-50 border border-violet-100 px-3 py-1 text-xs text-violet-700">
+            {{ emojiFor(d.type) }} {{ labelFor(d.type) }}
+            <span class="opacity-60 tabular-nums">×{{ d.count }}</span>
+          </span>
+        </div>
+      </template>
+
       <!-- Top users -->
       <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">Top 話癆</h2>
       <div class="bg-white rounded-2xl shadow-sm border border-gray-100 divide-y mb-6 overflow-hidden">
@@ -80,8 +117,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { Bar, Line } from 'vue-chartjs'
+import {
+  Chart as ChartJS, CategoryScale, LinearScale,
+  BarElement, PointElement, LineElement, Tooltip, Legend, Filler,
+} from 'chart.js'
 import { api } from '@/api/client'
+import { emojiFor, labelFor } from '@/constants/tripTypes'
+
+ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, Tooltip, Legend, Filler)
 
 const data = ref<any>(null)
 const loading = ref(true)
@@ -91,6 +136,47 @@ const TYPE_COLORS: Record<string, string> = {
   text: '#60a5fa', sticker: '#f472b6', image: '#34d399',
   video: '#fb923c', audio: '#a78bfa', file: '#94a3b8',
 }
+
+const MONTH_LABELS = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月']
+
+const monthlyLineData = computed(() => {
+  if (!data.value?.monthly_trend) return { labels: [], datasets: [] }
+  const rows = data.value.monthly_trend
+  return {
+    labels: rows.map((r: any) => r.month),
+    datasets: [{
+      label: '訊息數',
+      data: rows.map((r: any) => r.count),
+      borderColor: '#6366f1',
+      backgroundColor: 'rgba(99,102,241,0.1)',
+      fill: true,
+      tension: 0.35,
+    }],
+  }
+})
+
+const monthlyOptions = { responsive: true, plugins: { legend: { display: false } } }
+
+const latestGrowth = computed(() => {
+  const rows = data.value?.monthly_trend
+  if (!rows || !rows.length) return null
+  return rows[rows.length - 1].growth_rate_percent
+})
+
+const seasonBarData = computed(() => {
+  if (!data.value?.seasonality) return { labels: [], datasets: [] }
+  const map: Record<number, number> = {}
+  data.value.seasonality.forEach((r: any) => { map[r.month] = r.count })
+  return {
+    labels: MONTH_LABELS,
+    datasets: [{
+      data: MONTH_LABELS.map((_, i) => map[i + 1] || 0),
+      backgroundColor: '#fbbf24',
+    }],
+  }
+})
+
+const seasonOptions = { responsive: true, plugins: { legend: { display: false } } }
 
 onMounted(async () => {
   try { data.value = await api.dashboard() }

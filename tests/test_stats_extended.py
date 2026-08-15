@@ -5,6 +5,7 @@ import tempfile
 import time
 import pytest
 from travel.db import init_db, get_conn
+from travel.migrations import migrate
 
 
 @pytest.fixture
@@ -13,6 +14,7 @@ def temp_db(monkeypatch):
     os.close(fd)
     monkeypatch.setenv("DB_PATH", path)
     init_db()
+    migrate()
     yield path
     for ext in ("", "-wal", "-shm"):
         p = path + ext
@@ -185,3 +187,75 @@ def test_profile_top_topics(temp_db):
     data = get_profile_data("uA", "g1")
     topics = {t["topic"]: t["count"] for t in data["top_topics"]}
     assert topics["旅行"] == 2
+
+
+# ─── 個人頁擴充 ───────────────────────────────────────────────────────────────
+
+# 一天 = 86_400_000 ms。用固定基準日避免跨時區邊界。
+_DAY = 86_400_000
+_BASE = 1735689600000  # 2025-01-01 00:00 UTC
+
+
+def test_milestones_streak_and_busiest(temp_db):
+    from travel.stats_extended import get_user_milestones
+    with get_conn() as conn:
+        # Day0: 3 則（單日最高），Day1: 1 則，Day2: 1 則（連續 3 天）；Day5: 1 則（斷開）
+        for i in range(3):
+            _insert_msg(conn, msg_id=f"d0_{i}", user_id="uA", user_name="A",
+                        timestamp=_BASE + 3600000 + i)
+        _insert_msg(conn, msg_id="d1", user_id="uA", user_name="A", timestamp=_BASE + _DAY + 3600000)
+        _insert_msg(conn, msg_id="d2", user_id="uA", user_name="A", timestamp=_BASE + 2 * _DAY + 3600000)
+        _insert_msg(conn, msg_id="d5", user_id="uA", user_name="A", timestamp=_BASE + 5 * _DAY + 3600000)
+    m = get_user_milestones("uA", "g1")
+    assert m["total"] == 6
+    assert m["busiest_day"]["count"] == 3
+    assert m["longest_streak"]["days"] == 3
+    assert m["nth"] is None  # 未達 100 門檻
+
+
+def test_milestones_nth_threshold(temp_db):
+    from travel.stats_extended import get_user_milestones
+    with get_conn() as conn:
+        for i in range(105):
+            _insert_msg(conn, msg_id=f"x{i}", user_id="uA", user_name="A", timestamp=_BASE + i * 1000)
+    m = get_user_milestones("uA", "g1")
+    assert m["nth"]["n"] == 100
+    assert m["nth"]["timestamp"] == _BASE + 99 * 1000
+
+
+def test_daily_series_cumulative(temp_db):
+    from travel.stats_extended import get_user_daily_series
+    with get_conn() as conn:
+        _insert_msg(conn, msg_id="s0", user_id="uA", user_name="A", timestamp=_BASE + 3600000, sentiment=0.5)
+        _insert_msg(conn, msg_id="s1", user_id="uA", user_name="A", timestamp=_BASE + _DAY + 3600000, sentiment=-0.2)
+        _insert_msg(conn, msg_id="s2", user_id="uA", user_name="A", timestamp=_BASE + _DAY + 7200000, sentiment=0.4)
+    d = get_user_daily_series("uA", "g1")
+    assert [g["cumulative"] for g in d["growth"]] == [1, 3]
+    assert len(d["sentiment_series"]) == 2
+    assert d["sentiment_series"][1]["avg_sentiment"] == 0.1  # avg(-0.2, 0.4)
+
+
+def test_social_circle_bidirectional_and_shared_topics(temp_db):
+    from travel.stats_extended import get_user_social_circle
+    with get_conn() as conn:
+        # B 的原訊息，A 回覆 B（A→B）；再 B 回覆 A 的訊息（B→A）→ 合併計 2
+        _insert_msg(conn, msg_id="b1", user_id="uB", user_name="Bob", timestamp=_BASE + 1, topics=["旅行"])
+        _insert_msg(conn, msg_id="a1", user_id="uA", user_name="Alice", timestamp=_BASE + 2,
+                    reply_to="b1", topics=["旅行"])
+        _insert_msg(conn, msg_id="b2", user_id="uB", user_name="Bob", timestamp=_BASE + 3,
+                    reply_to="a1")
+    circle = get_user_social_circle("uA", "g1")
+    assert circle[0]["user_id"] == "uB"
+    assert circle[0]["count"] == 2
+    assert circle[0]["name"] == "Bob"
+    assert "旅行" in circle[0]["shared_topics"]
+
+
+def test_profile_extras_bundles_all_sections(temp_db):
+    from travel.stats_extended import get_profile_extras
+    with get_conn() as conn:
+        _insert_msg(conn, msg_id="e1", user_id="uA", user_name="A", timestamp=_BASE + 1)
+    extras = get_profile_extras("uA", "g1")
+    for key in ("milestones", "growth", "sentiment_series", "social_circle", "footprints", "badges"):
+        assert key in extras
+    assert extras["footprints"]["participated"] == 0

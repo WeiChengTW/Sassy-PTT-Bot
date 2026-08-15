@@ -8,9 +8,9 @@ import { emojiFor, labelFor } from '@/constants/tripTypes'
 const RARITY_HEX: Record<string, string> = {
   common: '#9ca3af',
   rare: '#3b82f6',
-  super_rare: '#a855f7',
-  epic: '#f43f5e',
-  legendary: '#f59e0b',
+  super_rare: '#f59e0b',
+  epic: '#a855f7',
+  legendary: '#f43f5e',
 }
 
 function fmtDate(ts: number): string {

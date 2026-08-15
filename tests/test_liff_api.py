@@ -83,6 +83,22 @@ def test_badges_returns_list(client, db):
     assert isinstance(r.get_json(), list)
 
 
+def test_badges_without_group_context_returns_user_badges(client, db):
+    # 先在 C1 為 U_MEMBER 建立 trip 與發放徽章
+    trip_id = create_trip("C1", "花蓮遊", "花蓮", 1700000000, None, "U_ADMIN")
+    add_participants(trip_id, ["U_MEMBER"])
+    end_trip(trip_id)
+    award_badges_for_trip(trip_id)
+
+    # 模擬個人從 1:1 或 Rich Menu 打開 LIFF（無 X-LIFF-GroupId）
+    r = client.get("/liff/badges/U_MEMBER", headers={"X-LIFF-UserId": "U_MEMBER"})
+    assert r.status_code == 200
+    badges = r.get_json()
+    assert isinstance(badges, list)
+    assert len(badges) >= 1
+    assert badges[0]["trip_id"] == trip_id
+
+
 def test_admin_create_trip(client):
     r = client.post(
         "/liff/admin/trips",
@@ -112,6 +128,19 @@ def test_admin_end_trip(client):
     )
     assert r.status_code == 200
     assert r.get_json()["status"] == "ended"
+
+
+def test_admin_update_trip(client):
+    trip_id = create_trip("C1", "舊名稱", "loc", 1700000000, None, "U_ADMIN")
+    r = client.post(
+        f"/liff/admin/trips/{trip_id}/update",
+        json={"title": "更新後的名稱", "location": "花蓮", "rarity": "legendary"},
+        headers=_headers("U_ADMIN"),
+    )
+    assert r.status_code == 200
+    assert r.get_json()["title"] == "更新後的名稱"
+    assert r.get_json()["location"] == "花蓮"
+    assert r.get_json()["rarity"] == "legendary"
 
 
 def test_admin_award_badges(client):

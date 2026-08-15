@@ -74,3 +74,30 @@ def test_get_participants_returns_list(db):
     assert len(participants) == 2
     user_ids = {p["user_id"] for p in participants}
     assert {"U1", "U2"} == user_ids
+
+
+def test_update_trip_details(db):
+    from travel.trip_crud import create_trip, update_trip, get_trip
+    trip_id = create_trip("C1", "舊名稱", "台北", 1700000000, None, "U1")
+    res = update_trip(trip_id, title="新名稱", location="台南", rarity="epic")
+    assert res["success"] is True
+    trip = get_trip(trip_id)
+    assert trip["title"] == "新名稱"
+    assert trip["location"] == "台南"
+    assert trip["rarity"] == "epic"
+
+def test_get_user_trips_participation_and_initiated(db):
+    from travel.trip_crud import create_trip, add_participants, get_user_trips
+    # U1 發起 t1 並參與；U2 只參與 t1；t2 由 U2 發起、U1 也參與
+    t1 = create_trip("C1", "墾丁", "墾丁", 1700000000, ["beach"], created_by="U1")
+    t2 = create_trip("C1", "武嶺", "武嶺", 1700100000, ["mountain"], created_by="U2")
+    add_participants(t1, ["U1", "U2"])
+    add_participants(t2, ["U1"])
+
+    res = get_user_trips("U1", "C1")
+    assert res["participated"] == 2
+    assert res["initiated"] == 1  # 只有 t1 是 U1 發起
+    # 依 start_date DESC：t2(較晚) 在前
+    assert res["trips"][0]["title"] == "武嶺"
+    assert res["trips"][0]["is_creator"] is False
+    assert all("badge_emoji" in t for t in res["trips"])

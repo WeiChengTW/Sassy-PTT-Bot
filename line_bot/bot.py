@@ -449,13 +449,13 @@ class SassyBrain:
 
             if is_personal:
                 user_id = getattr(event.source, "user_id", "") or ""
-                name = self._get_sender_label(user_id, group_id=group_id)
+                name, pic_url = self._get_sender_info(user_id, group_id=group_id)
                 profile = get_profile_data(user_id, group_id, "all")
                 badges = get_user_badges(user_id, group_id)
                 inter = get_interaction_data(group_id, "all")
                 best_friend = cards.best_friend_of(inter, user_id)
                 msg = cards.build_personal_card(profile, badges, best_friend,
-                                                name, LIFF_URL, user_id)
+                                                name, LIFF_URL, user_id, picture_url=pic_url)
                 self._reply_flex(event, msg)
                 return True
 
@@ -711,19 +711,16 @@ class SassyBrain:
             "timestamp": timestamp_ms,
         })
 
-    def _get_sender_label(self, user_id: str, group_id: str | None = None) -> str:
-        """LINE user_id → display_name。
-
-        優先用 get_group_member_profile（群組成員可抓），
-        fallback 到 get_profile（1:1 chat / 已加好友），
-        最後 fallback 到 '路人{user_id[-6:]}'。
-        結果 cache 在 self._user_names。
+    def _get_sender_info(self, user_id: str, group_id: str | None = None) -> tuple[str, str | None]:
+        """取得 LINE user 的 (display_name, picture_url)。
+        
+        優先用 get_group_member_profile，fallback 到 get_profile，
+        最後 fallback 到 ('路人{user_id[-6:]}', None)。
         """
         if not user_id:
-            return "路人"
-        if user_id in self._user_names:
-            return self._user_names[user_id]
+            return "路人", None
         name = None
+        pic = None
         if self.line_api:
             if group_id:
                 try:
@@ -731,6 +728,7 @@ class SassyBrain:
                         group_id, user_id, _request_timeout=_LINE_API_TIMEOUT,
                     )
                     name = (getattr(profile, "display_name", "") or "").strip()
+                    pic = getattr(profile, "picture_url", None)
                 except Exception as e:
                     logger.warning(f"[SENDER] get_group_member_profile({group_id}, {user_id}) 失敗: {e}")
             if not name:
@@ -739,11 +737,23 @@ class SassyBrain:
                         user_id, _request_timeout=_LINE_API_TIMEOUT,
                     )
                     name = (getattr(profile, "display_name", "") or "").strip()
+                    pic = getattr(profile, "picture_url", None)
                 except Exception as e:
                     logger.warning(f"[SENDER] get_profile({user_id}) 失敗: {e}")
         if not name:
-            name = f"路人{user_id[-6:]}"
+            name = self._user_names.get(user_id) or f"路人{user_id[-6:]}"
         self._user_names[user_id] = name
+        return name, pic
+
+    def _get_sender_label(self, user_id: str, group_id: str | None = None) -> str:
+        """LINE user_id → display_name。
+
+        優先用 get_group_member_profile（群組成員可抓），
+        fallback 到 get_profile（1:1 chat / 已加好友），
+        最後 fallback 到 '路人{user_id[-6:]}'。
+        結果 cache 在 self._user_names。
+        """
+        name, _ = self._get_sender_info(user_id, group_id=group_id)
         return name
 
     def _record_turn(self, chat_id: str, sender: str, text: str, role: str):

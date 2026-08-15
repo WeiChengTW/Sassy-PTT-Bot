@@ -3,25 +3,25 @@
     <button @click="$router.back()" class="text-sm text-gray-500 mb-4">← 返回</button>
     <div v-if="loading" class="text-center py-8 text-gray-400">載入中...</div>
     <div v-else-if="detail">
-      <div class="bg-white rounded-xl shadow p-4 mb-4">
+      <div class="rounded-2xl border p-5 shadow-sm mb-4" :class="rarity.card">
         <div class="flex items-start justify-between gap-2">
-          <h1 class="text-xl font-bold">{{ detail.trip.title }}</h1>
+          <h1 class="text-xl font-bold" :class="rarity.name">{{ detail.trip.title }}</h1>
           <span v-if="detail.trip.rarity"
-                class="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium"
+                class="shrink-0 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold"
                 :class="rarity.pill">
-            {{ rarity.emoji }} {{ rarity.zh }}
+            {{ rarity.zh }}
           </span>
         </div>
-        <p v-if="detail.trip.location" class="text-gray-500 text-sm">{{ detail.trip.location }}</p>
-        <p v-if="dateRange" class="text-gray-500 text-sm mt-0.5">🗓️ {{ dateRange }}</p>
+        <p v-if="detail.trip.location" class="text-sm mt-1" :class="rarity.date">{{ detail.trip.location }}</p>
+        <p v-if="dateRange" class="text-sm mt-0.5" :class="rarity.date">🗓️ {{ dateRange }}</p>
         <div v-if="detail.trip.trip_types && detail.trip.trip_types.length"
-             class="flex flex-wrap gap-1.5 mt-2">
+             class="flex flex-wrap gap-1.5 mt-3">
           <span v-for="ty in detail.trip.trip_types" :key="ty"
-                class="inline-flex items-center gap-1 rounded-full bg-blue-50 text-blue-600 px-2.5 py-0.5 text-xs">
+                class="inline-flex items-center gap-1 rounded-full bg-white/70 backdrop-blur-sm border border-black/5 px-2.5 py-0.5 text-xs font-medium text-gray-700">
             {{ emojiFor(ty) }} {{ labelFor(ty) }}
           </span>
         </div>
-        <p class="text-xs text-gray-400 mt-1">
+        <p class="text-xs mt-3 font-medium opacity-70" :class="rarity.name">
           狀態：{{ detail.trip.status === 'ended' ? '已結束' : '進行中' }}
           · 訊息數 {{ detail.stats.message_count }}
         </p>

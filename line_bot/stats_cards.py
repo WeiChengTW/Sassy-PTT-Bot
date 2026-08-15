@@ -7,7 +7,7 @@ Flex Message / Carousel 與 Quick Reply。純函式、無副作用，方便單�
 本模組，故不影響「無 SDK 也能跑」的設計。
 """
 from linebot.v3.messaging import (
-    FlexMessage, FlexBubble, FlexBox, FlexText, FlexButton, FlexSeparator,
+    FlexMessage, FlexBubble, FlexBox, FlexText, FlexButton, FlexSeparator, FlexImage,
     URIAction, MessageAction, QuickReply, QuickReplyItem, TextMessage,
 )
 
@@ -175,7 +175,8 @@ def build_report_carousel(dash: dict, lead: dict, inter: dict, topics: dict,
 # ── 方案 C：個人戰績卡 ──────────────────────────────────────────────
 
 def build_personal_card(profile: dict, badges: list, best_friend: str | None,
-                        user_name: str, liff_url: str, user_id: str = "") -> FlexMessage:
+                        user_name: str, liff_url: str, user_id: str = "",
+                        picture_url: str | None = None) -> FlexMessage:
     summary = profile.get("summary") or {}
     slots = profile.get("time_slots") or {}
     tags = [p.get("tag") for p in (profile.get("personality") or []) if p.get("tag")]
@@ -212,13 +213,38 @@ def build_personal_card(profile: dict, badges: list, best_friend: str | None,
         body.append(FlexText(text=f"🎖️ 徽章 {len(badges)}　{emojis}", size="sm",
                              color=GOLD, wrap=True))
 
+    header_text_box = FlexBox(
+        layout="vertical",
+        flex=1,
+        contents=[
+            FlexText(text="個人戰績卡", size="xs", color="#ffffffcc"),
+            FlexText(text=f"🎖️ {user_name}", size="lg", weight="bold",
+                     color="#ffffff", wrap=True, margin="xs"),
+        ],
+    )
+
+    header_contents = []
+    if picture_url:
+        header_contents.append(
+            FlexImage(
+                url=picture_url,
+                size="sm",
+                aspect_ratio="1:1",
+                aspect_mode="cover",
+                flex=0,
+            )
+        )
+    header_contents.append(header_text_box)
+
     bubble = FlexBubble(
-        header=FlexBox(layout="vertical", backgroundColor=BLUE, paddingAll="16px",
-                       contents=[
-                           FlexText(text="個人戰績卡", size="xs", color="#ffffffcc"),
-                           FlexText(text=f"🎖️ {user_name}", size="lg", weight="bold",
-                                    color="#ffffff", wrap=True, margin="sm"),
-                       ]),
+        header=FlexBox(
+            layout="horizontal" if picture_url else "vertical",
+            backgroundColor=BLUE,
+            paddingAll="16px",
+            spacing="md" if picture_url else "none",
+            alignItems="center" if picture_url else "flex-start",
+            contents=header_contents,
+        ),
         body=FlexBox(layout="vertical", spacing="sm", paddingAll="16px", contents=body),
         footer=FlexBox(layout="vertical", paddingAll="12px", contents=[
             _liff_button("📊 開啟個人檔案",

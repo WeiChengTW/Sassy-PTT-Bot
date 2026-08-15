@@ -68,14 +68,21 @@ def test_compute_badge_emoji_beach(db):
     from travel.badges import compute_badge_emoji
     trip = {"location": "墾丁海邊"}
     emoji = compute_badge_emoji(trip, "epic")
-    assert emoji == "🏖️🔴"
+    assert emoji == "🏖️"
+
+
+def test_compute_badge_emoji_legendary(db):
+    from travel.badges import compute_badge_emoji
+    trip = {"location": "日本"}
+    emoji = compute_badge_emoji(trip, "legendary")
+    assert emoji == "✈️"
 
 
 def test_compute_badge_emoji_fallback(db):
     from travel.badges import compute_badge_emoji
     trip = {"location": "未知地方"}
     emoji = compute_badge_emoji(trip, "common")
-    assert emoji == "🗺️🟢"
+    assert emoji == "🎒"
 
 
 def test_award_badges_for_trip_writes_db(db):

@@ -82,9 +82,26 @@ def test_report_carousel_has_three_bubbles():
 def test_personal_card_includes_name_and_best_friend():
     bf = cards.best_friend_of(INTER, "U1")
     assert bf == "小華"
-    msg = cards.build_personal_card(PROFILE, BADGES, bf, "阿明", LIFF, "U1")
+    msg = cards.build_personal_card(
+        PROFILE, BADGES, bf, "阿明", LIFF, "U1", picture_url="https://profile.line-scdn.net/abc"
+    )
     assert "阿明" in msg.alt_text
     assert "小華" in _all_text(msg.contents.body)  # 最佳拍檔
+    # 檢查 header 是否包含頭像 FlexImage
+    header = msg.contents.header
+    assert header is not None
+    # 尋找 header 內是否有 image 節點且 url 相符
+    images = [c for c in header.contents if getattr(c, "type", "") == "image" or getattr(c, "url", None)]
+    # 或在 header 的子 box 裡
+    all_imgs = []
+    def find_imgs(node):
+        if getattr(node, "type", "") == "image" or getattr(node, "url", None):
+            all_imgs.append(node)
+        for child in (getattr(node, "contents", None) or []):
+            find_imgs(child)
+    find_imgs(header)
+    assert len(all_imgs) == 1
+    assert all_imgs[0].url == "https://profile.line-scdn.net/abc"
 
 
 def test_quick_reply_has_five_items():

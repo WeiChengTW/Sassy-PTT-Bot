@@ -55,6 +55,10 @@ export const api = {
   tripDetail: (id: string) => req<any>(`/trips/${id}`),
   badges: (userId: string) => req<any[]>(`/badges/${userId}`),
   adminCreateTrip: (body: any) => req<any>('/admin/trips', { method: 'POST', body: JSON.stringify(body) }),
+  adminUpdateTrip: (tripId: string, body: { title?: string; location?: string; rarity?: string }) =>
+    req<any>(`/admin/trips/${tripId}/update`, { method: 'POST', body: JSON.stringify(body) }),
+  adminUpdateTripTitle: (tripId: string, title: string) =>
+    req<any>(`/admin/trips/${tripId}/title`, { method: 'POST', body: JSON.stringify({ title }) }),
   adminAddParticipants: (tripId: string, userIds: string[]) =>
     req<any>(`/admin/trips/${tripId}/participants`, { method: 'POST', body: JSON.stringify({ user_ids: userIds }) }),
   adminEndTrip: (tripId: string) => req<any>(`/admin/trips/${tripId}/end`, { method: 'POST' }),
@@ -63,6 +67,7 @@ export const api = {
   interactions: () => req<any>('/interactions'),
   topics: () => req<any>('/topics'),
   profile: (userId: string) => req<any>(`/profile/${userId}`),
+  adminAnalyzeTopics: () => req<{ updated: number; success: boolean }>('/admin/analyze-topics', { method: 'POST' }),
   adminGroups: () => req<any[]>('/admin/groups'),
   adminMembers: () => req<{ user_id: string; display_name: string; source: string; resolved: number }[]>('/admin/members'),
   periods: () => req<{ years: string[]; months: string[] }>('/periods'),

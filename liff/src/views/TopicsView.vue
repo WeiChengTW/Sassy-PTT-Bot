@@ -1,6 +1,21 @@
 <template>
   <div>
-    <h1 class="text-xl font-bold mb-4 text-gray-900">話題分析</h1>
+    <div class="flex items-center justify-between mb-4">
+      <div>
+        <h1 class="text-xl font-bold text-gray-900">話題分析</h1>
+        <p v-if="data?.last_analyzed_at" class="text-[11px] text-gray-400 mt-0.5">
+          最後分析：{{ formatAnalyzedTime(data.last_analyzed_at) }}
+        </p>
+      </div>
+      <!-- 管理員觸發重新分析按鈕 -->
+      <button v-if="auth.role === 'admin'"
+              @click="triggerReanalyze"
+              :disabled="analyzing"
+              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100 disabled:opacity-50 transition-colors">
+        <span :class="analyzing ? 'animate-spin' : ''">🔄</span>
+        <span>{{ analyzing ? 'LLM 分析中...' : '重新分析' }}</span>
+      </button>
+    </div>
     <div v-if="loading">
       <div class="skeleton h-4 w-28 rounded-full mb-3" />
       <div class="skeleton rounded-2xl mb-6" style="height:220px" />
@@ -126,13 +141,40 @@ import {
   BarElement, PointElement, LineElement, Title, Tooltip, Legend, Filler,
 } from 'chart.js'
 import { api } from '@/api/client'
+import { useAuthStore } from '@/stores/auth'
+import { useToast } from '@/composables/useToast'
 import WordCloud from '@/components/WordCloud.vue'
 
 ChartJS.register(CategoryScale, LinearScale, ArcElement, BarElement, PointElement, LineElement, Title, Tooltip, Legend, Filler)
 
+const auth = useAuthStore()
+const toast = useToast()
 const data = ref<any>(null)
 const loading = ref(true)
+const analyzing = ref(false)
 const error = ref('')
+
+function formatAnalyzedTime(ts: number) {
+  if (!ts) return ''
+  const d = new Date(ts * 1000)
+  const pad = (n: number) => n.toString().padStart(2, '0')
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+async function triggerReanalyze() {
+  if (analyzing.value) return
+  analyzing.value = true
+  try {
+    const res = await api.adminAnalyzeTopics()
+    toast.success(`LLM 分析完成，更新了 ${res.updated} 則訊息 🎉`)
+    // 重新載入話題資料
+    data.value = await api.topics()
+  } catch (e: any) {
+    toast.error(e?.message || '分析失敗，請稍後再試')
+  } finally {
+    analyzing.value = false
+  }
+}
 
 const topicBarData = computed(() => {
   if (!data.value) return { labels: [], datasets: [] }

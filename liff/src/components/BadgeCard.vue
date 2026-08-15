@@ -22,8 +22,8 @@
                    font-medium" :class="rarityStyle.pill">
         {{ rarityLabel }}
       </span>
-      <p v-if="earnedDate" class="text-xs mt-1" :class="rarityStyle.date">
-        {{ earnedDate }}
+      <p v-if="displayDate" class="text-xs mt-1" :class="rarityStyle.date">
+        {{ displayDate }}
       </p>
     </div>
 
@@ -39,9 +39,10 @@ import { rarityOf } from '@/constants/rarity'
 const props = defineProps<{ badge: any }>()
 
 const rarityStyle = computed(() => rarityOf(props.badge.badge_rarity))
-const rarityLabel = computed(() => `${rarityStyle.value.emoji} ${rarityStyle.value.zh}`)
-const earnedDate = computed(() => {
-  if (!props.badge.earned_at) return ''
-  return new Date(props.badge.earned_at * 1000).toLocaleDateString('zh-TW')
+const rarityLabel = computed(() => `${rarityStyle.value.zh}`)
+const displayDate = computed(() => {
+  const ts = props.badge.start_date || props.badge.earned_at
+  if (!ts) return ''
+  return new Date(ts * 1000).toLocaleDateString('zh-TW')
 })
 </script>

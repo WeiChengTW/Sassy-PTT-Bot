@@ -24,7 +24,8 @@ def get_leaderboard_data(group_id: str, period: str = "all") -> dict:
                       COUNT(*) AS total,
                       SUM(CASE WHEN type='text'    THEN 1 ELSE 0 END) AS text_count,
                       SUM(CASE WHEN type='sticker' THEN 1 ELSE 0 END) AS sticker_count,
-                      SUM(CASE WHEN type='image'   THEN 1 ELSE 0 END) AS image_count
+                      SUM(CASE WHEN type='image'   THEN 1 ELSE 0 END) AS image_count,
+                      SUM(CASE WHEN type='video'   THEN 1 ELSE 0 END) AS video_count
                FROM messages WHERE group_id=?{pf}
                GROUP BY user_id ORDER BY total DESC LIMIT 20""",
             (group_id, *pp),
@@ -45,10 +46,38 @@ def get_leaderboard_data(group_id: str, period: str = "all") -> dict:
             (group_id, *pp),
         ).fetchall()
 
+        badge_rankings = conn.execute(
+            """SELECT b.user_id,
+                      COALESCE(
+                        (SELECT display_name FROM members WHERE user_id=b.user_id LIMIT 1),
+                        (SELECT user_name FROM messages WHERE user_id=b.user_id AND user_name IS NOT NULL ORDER BY timestamp DESC LIMIT 1)
+                      ) AS user_name,
+                      COUNT(*) AS badge_count,
+                      SUM(CASE WHEN b.badge_rarity='legendary' THEN 1 ELSE 0 END) AS legendary_count,
+                      SUM(CASE WHEN b.badge_rarity='epic' THEN 1 ELSE 0 END) AS epic_count,
+                      SUM(CASE WHEN b.badge_rarity='super_rare' THEN 1 ELSE 0 END) AS super_rare_count,
+                      SUM(CASE WHEN b.badge_rarity='rare' THEN 1 ELSE 0 END) AS rare_count,
+                      SUM(CASE WHEN b.badge_rarity='common' THEN 1 ELSE 0 END) AS common_count,
+                      ROUND(
+                          SUM(CASE WHEN b.badge_rarity='legendary' THEN 2.0 ELSE 0.0 END) +
+                          SUM(CASE WHEN b.badge_rarity='epic' THEN 1.5 ELSE 0.0 END) +
+                          SUM(CASE WHEN b.badge_rarity='super_rare' THEN 1.0 ELSE 0.0 END) +
+                          SUM(CASE WHEN b.badge_rarity='rare' THEN 0.8 ELSE 0.0 END) +
+                          SUM(CASE WHEN b.badge_rarity='common' THEN 0.5 ELSE 0.0 END)
+                      , 1) AS score
+               FROM badges b
+               LEFT JOIN trips t ON t.id = b.trip_id
+               WHERE b.user_id IS NOT NULL AND (t.group_id=? OR t.group_id IS NULL)
+               GROUP BY b.user_id
+               ORDER BY badge_count DESC, legendary_count DESC, epic_count DESC, super_rare_count DESC""",
+            (group_id,),
+        ).fetchall()
+
     return {
         "rankings": [dict(r) for r in rankings],
         "night_owls": [dict(r) for r in night_owls],
         "type_distribution": [dict(r) for r in type_dist],
+        "badge_rankings": [dict(r) for r in badge_rankings],
     }
 
 
@@ -258,6 +287,16 @@ def get_topics_data(group_id: str, period: str = "all") -> dict:
         for r in quote_rows
     ]
 
+    with get_conn() as conn:
+        last_row = conn.execute(
+            """SELECT MAX(analyzed_at) AS last_analyzed_at,
+                      COUNT(CASE WHEN analyzed_at IS NULL AND content IS NOT NULL AND type='text' AND length(content) > 1 THEN 1 END) AS unanalyzed_count
+               FROM messages WHERE group_id=?""",
+            (group_id,),
+        ).fetchone()
+    last_analyzed_at = last_row["last_analyzed_at"] if last_row else None
+    unanalyzed_count = last_row["unanalyzed_count"] if last_row else 0
+
     return {
         "top_topics": top_topics,
         "top_keywords": top_keywords,
@@ -267,6 +306,8 @@ def get_topics_data(group_id: str, period: str = "all") -> dict:
         "topic_sentiment": topic_sentiment,
         "hot_locations": hot_locations,
         "highlight_quotes": highlight_quotes,
+        "last_analyzed_at": last_analyzed_at,
+        "unanalyzed_count": unanalyzed_count,
     }
 
 
@@ -370,7 +411,20 @@ def get_profile_data(user_id: str, group_id: str, period: str = "all") -> dict:
     type_breakdown = [dict(r) for r in type_rows]
     personality = _compute_personality(type_breakdown, time_slots, avg_sentiment, total)
 
+    # 取得使用者名稱（members 表或 messages 最新一則）
+    with get_conn() as conn:
+        name_row = conn.execute(
+            """SELECT COALESCE(
+                 (SELECT display_name FROM members WHERE user_id=? LIMIT 1),
+                 (SELECT user_name FROM messages WHERE user_id=? AND user_name IS NOT NULL ORDER BY timestamp DESC LIMIT 1)
+               ) AS name""",
+            (user_id, user_id),
+        ).fetchone()
+    display_name = name_row["name"] if name_row and name_row["name"] else None
+
     return {
+        "user_id": user_id,
+        "display_name": display_name,
         "summary": {
             "total": total,
             "active_days": active_days,
@@ -384,4 +438,194 @@ def get_profile_data(user_id: str, group_id: str, period: str = "all") -> dict:
         "top_topics": top_topics,
         "avg_sentiment": round(avg_sentiment, 3) if avg_sentiment is not None else None,
         "personality": personality,
+    }
+
+
+# ── 個人頁擴充查詢（不併入 get_profile_data，避免拖慢 bot 戰績卡）──────────
+
+_MILESTONE_THRESHOLDS = [100, 500, 1000, 5000, 10000]
+
+
+def get_user_milestones(user_id: str, group_id: str, period: str = "all") -> dict:
+    """里程碑：第 N 則達成時間、單日最高、最長連續發言天數。"""
+    pf, pp = period_filter(period)
+    with get_conn() as conn:
+        total = conn.execute(
+            f"SELECT COUNT(*) AS c FROM messages WHERE user_id=? AND group_id=?{pf}",
+            (user_id, group_id, *pp),
+        ).fetchone()["c"]
+
+        nth = None
+        threshold = max((t for t in _MILESTONE_THRESHOLDS if t <= total), default=0)
+        if threshold:
+            row = conn.execute(
+                f"""SELECT timestamp FROM messages
+                   WHERE user_id=? AND group_id=?{pf}
+                   ORDER BY timestamp LIMIT 1 OFFSET ?""",
+                (user_id, group_id, *pp, threshold - 1),
+            ).fetchone()
+            if row:
+                nth = {"n": threshold, "timestamp": row["timestamp"]}
+
+        busiest = conn.execute(
+            f"""SELECT date(timestamp/1000,'unixepoch') AS date, COUNT(*) AS count
+               FROM messages WHERE user_id=? AND group_id=?{pf}
+               GROUP BY date ORDER BY count DESC, date DESC LIMIT 1""",
+            (user_id, group_id, *pp),
+        ).fetchone()
+        busiest_day = dict(busiest) if busiest else None
+
+        date_rows = conn.execute(
+            f"""SELECT DISTINCT date(timestamp/1000,'unixepoch') AS date
+               FROM messages WHERE user_id=? AND group_id=?{pf}
+               ORDER BY date""",
+            (user_id, group_id, *pp),
+        ).fetchall()
+
+    dates = [r["date"] for r in date_rows if r["date"]]
+    longest_streak = _longest_date_streak(dates)
+
+    return {
+        "total": total,
+        "nth": nth,
+        "busiest_day": busiest_day,
+        "longest_streak": longest_streak,
+    }
+
+
+def _longest_date_streak(dates: list[str]) -> dict | None:
+    """dates 為已排序的 'YYYY-MM-DD' 清單，回傳最長連續天數區間。"""
+    from datetime import date as _date, timedelta
+
+    if not dates:
+        return None
+    best_len, best_start, best_end = 1, dates[0], dates[0]
+    cur_len, cur_start, prev = 1, dates[0], _date.fromisoformat(dates[0])
+    for d_str in dates[1:]:
+        d = _date.fromisoformat(d_str)
+        if d - prev == timedelta(days=1):
+            cur_len += 1
+        else:
+            cur_len, cur_start = 1, d_str
+        if cur_len > best_len:
+            best_len, best_start, best_end = cur_len, cur_start, d_str
+        prev = d
+    return {"days": best_len, "start": best_start, "end": best_end}
+
+
+def get_user_daily_series(user_id: str, group_id: str, period: str = "all") -> dict:
+    """成長曲線（每日訊息 + 累積）與情緒曲線（每日平均情緒）。"""
+    pf, pp = period_filter(period)
+    with get_conn() as conn:
+        count_rows = conn.execute(
+            f"""SELECT date(timestamp/1000,'unixepoch') AS date, COUNT(*) AS count
+               FROM messages WHERE user_id=? AND group_id=?{pf}
+               GROUP BY date ORDER BY date ASC""",
+            (user_id, group_id, *pp),
+        ).fetchall()
+        sentiment_rows = conn.execute(
+            f"""SELECT date(timestamp/1000,'unixepoch') AS date,
+                      AVG(sentiment) AS avg_sentiment
+               FROM messages WHERE user_id=? AND group_id=?{pf}
+                 AND sentiment IS NOT NULL
+               GROUP BY date ORDER BY date ASC""",
+            (user_id, group_id, *pp),
+        ).fetchall()
+
+    growth, cumulative = [], 0
+    for r in count_rows:
+        cumulative += r["count"]
+        growth.append({"date": r["date"], "count": r["count"], "cumulative": cumulative})
+
+    sentiment_series = [
+        {"date": r["date"], "avg_sentiment": round(r["avg_sentiment"], 3)}
+        for r in sentiment_rows if r["avg_sentiment"] is not None
+    ]
+    return {"growth": growth, "sentiment_series": sentiment_series}
+
+
+def get_user_social_circle(user_id: str, group_id: str, period: str = "all") -> list:
+    """個人社交圈：最常透過 reply 互動的對象（雙向合併）+ 共同話題。"""
+    pf, pp = period_filter(period, "a.timestamp")
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"""SELECT a.user_id AS a_id, b.user_id AS b_id, COUNT(*) AS count
+               FROM messages a
+               JOIN messages b ON a.reply_to_message_id = b.line_message_id
+               WHERE a.group_id=? AND b.group_id=? AND a.user_id != b.user_id
+                 AND (a.user_id=? OR b.user_id=?){pf}
+               GROUP BY a.user_id, b.user_id""",
+            (group_id, group_id, user_id, user_id, *pp),
+        ).fetchall()
+
+        partner_counts: dict[str, int] = {}
+        for r in rows:
+            partner = r["b_id"] if r["a_id"] == user_id else r["a_id"]
+            partner_counts[partner] = partner_counts.get(partner, 0) + r["count"]
+
+        top_partners = sorted(partner_counts.items(), key=lambda x: -x[1])[:5]
+        if not top_partners:
+            return []
+
+        # 自己的話題集合（用於取交集）
+        my_topics = _topic_counter_for(conn, user_id, group_id, period)
+
+        result = []
+        for partner_id, count in top_partners:
+            name = _resolve_name(conn, partner_id)
+            their_topics = _topic_counter_for(conn, partner_id, group_id, period)
+            shared = sorted(
+                (t for t in their_topics if t in my_topics),
+                key=lambda t: -(my_topics[t] + their_topics[t]),
+            )[:3]
+            result.append({
+                "user_id": partner_id, "name": name,
+                "count": count, "shared_topics": shared,
+            })
+        return result
+
+
+def _topic_counter_for(conn, user_id: str, group_id: str, period: str) -> dict:
+    pf, pp = period_filter(period)
+    rows = conn.execute(
+        f"""SELECT topics FROM messages
+           WHERE user_id=? AND group_id=?{pf}
+             AND topics IS NOT NULL AND topics != '[]'""",
+        (user_id, group_id, *pp),
+    ).fetchall()
+    counter: dict[str, int] = {}
+    for r in rows:
+        try:
+            for t in json.loads(r["topics"]):
+                counter[t] = counter.get(t, 0) + 1
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return counter
+
+
+def _resolve_name(conn, user_id: str) -> str:
+    row = conn.execute(
+        """SELECT COALESCE(
+             (SELECT display_name FROM members WHERE user_id=? LIMIT 1),
+             (SELECT user_name FROM messages WHERE user_id=? AND user_name IS NOT NULL
+              ORDER BY timestamp DESC LIMIT 1)
+           ) AS name""",
+        (user_id, user_id),
+    ).fetchone()
+    return (row["name"] if row and row["name"] else None) or f"路人{user_id[-6:]}"
+
+
+def get_profile_extras(user_id: str, group_id: str, period: str = "all") -> dict:
+    """個人頁擴充區塊彙整：里程碑 / 成長 / 情緒 / 社交圈 / 足跡 / 徽章。"""
+    from travel.trip_crud import get_user_trips
+    from travel.stats import get_user_badges
+
+    daily = get_user_daily_series(user_id, group_id, period)
+    return {
+        "milestones": get_user_milestones(user_id, group_id, period),
+        "growth": daily["growth"],
+        "sentiment_series": daily["sentiment_series"],
+        "social_circle": get_user_social_circle(user_id, group_id, period),
+        "footprints": get_user_trips(user_id, group_id),
+        "badges": get_user_badges(user_id, group_id),
     }

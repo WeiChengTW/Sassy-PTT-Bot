@@ -6,6 +6,8 @@ export const useAuthStore = defineStore('auth', {
   state: () => ({
     initialized: false,
     userId: '',
+    displayName: '',
+    pictureUrl: '',
     role: '' as 'admin' | 'member' | '',
     groupId: '',
     isMember: false,
@@ -20,6 +22,8 @@ export const useAuthStore = defineStore('auth', {
       }
       const profile = await liff.getProfile()
       this.userId = profile.userId
+      this.displayName = profile.displayName || ''
+      this.pictureUrl = profile.pictureUrl || ''
 
       // Try to get groupId from LIFF context. getContext() only returns a real
       // groupId (C + 32 hex) when opened inside a group chat; in 1:1 / rich-menu

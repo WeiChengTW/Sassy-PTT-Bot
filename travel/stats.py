@@ -178,12 +178,31 @@ def get_trip_detail(trip_id: str) -> dict:
                FROM trip_participants tp WHERE tp.trip_id=?""",
             (trip_id,),
         ).fetchall()
-        msg_count = conn.execute(
-            "SELECT COUNT(*) FROM messages WHERE group_id=(SELECT group_id FROM trips WHERE id=?) AND timestamp BETWEEN (SELECT start_date*1000 FROM trips WHERE id=?) AND COALESCE((SELECT end_date*1000 FROM trips WHERE id=?), 9999999999999)",
-            (trip_id, trip_id, trip_id),
-        ).fetchone()[0]
+        
+        trip = dict(trip_row) if trip_row else {}
+        gid = trip.get("group_id")
+        st = trip.get("start_date")
+        et = trip.get("end_date")
 
-    trip = dict(trip_row) if trip_row else {}
+        if gid and st:
+            if et:
+                # end_date 當天 23:59:59
+                end_ts_ms = (et + 86400) * 1000 - 1
+            elif trip.get("status") == "ended":
+                # 單日事件若已結束但無 end_date，計算出發日當天 24 小時內訊息
+                end_ts_ms = (st + 86400) * 1000 - 1
+            else:
+                # 進行中的旅行
+                end_ts_ms = int(time.time() * 1000)
+
+            start_ts_ms = st * 1000
+            msg_count = conn.execute(
+                "SELECT COUNT(*) FROM messages WHERE group_id=? AND timestamp BETWEEN ? AND ?",
+                (gid, start_ts_ms, end_ts_ms),
+            ).fetchone()[0]
+        else:
+            msg_count = 0
+
     if trip:
         trip["trip_types"] = parse_trip_types(trip.get("trip_type"))
 
@@ -195,25 +214,41 @@ def get_trip_detail(trip_id: str) -> dict:
     }
 
 
-def get_user_badges(user_id: str, group_id: str) -> list[dict]:
-    """回傳 user 在某群組的所有徽章。"""
+def get_user_badges(user_id: str, group_id: str | None = None) -> list[dict]:
+    """回傳 user 在某群組（若有指定）或全部的所有徽章。"""
     with get_conn() as conn:
-        rows = conn.execute(
-            """SELECT b.id AS badge_id, b.badge_name, b.badge_rarity,
-                      b.badge_image_url, b.earned_at, b.trip_id, b.description,
-                      t.location
-               FROM badges b
-               LEFT JOIN trips t ON t.id = b.trip_id
-               WHERE b.user_id=? AND (t.group_id=? OR t.group_id IS NULL)
-                 AND b.user_id IS NOT NULL
-               ORDER BY b.earned_at DESC""",
-            (user_id, group_id),
-        ).fetchall()
+        if group_id:
+            rows = conn.execute(
+                """SELECT b.id AS badge_id, b.badge_name, b.badge_rarity,
+                          b.badge_image_url, b.earned_at, b.trip_id, b.description,
+                          t.title, t.location, t.trip_type, t.start_date, t.end_date
+                   FROM badges b
+                   LEFT JOIN trips t ON t.id = b.trip_id
+                   WHERE b.user_id=? AND (t.group_id=? OR t.group_id IS NULL)
+                     AND b.user_id IS NOT NULL
+                   ORDER BY COALESCE(t.start_date, b.earned_at) DESC""",
+                (user_id, group_id),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT b.id AS badge_id, b.badge_name, b.badge_rarity,
+                          b.badge_image_url, b.earned_at, b.trip_id, b.description,
+                          t.title, t.location, t.trip_type, t.start_date, t.end_date
+                   FROM badges b
+                   LEFT JOIN trips t ON t.id = b.trip_id
+                   WHERE b.user_id=? AND b.user_id IS NOT NULL
+                   ORDER BY COALESCE(t.start_date, b.earned_at) DESC""",
+                (user_id,),
+            ).fetchall()
     result = []
     for r in rows:
         badge = dict(r)
         rarity = badge.get("badge_rarity") or "common"
-        trip_info = {"location": badge.get("location") or ""}
+        trip_info = {
+            "title": badge.get("title") or "",
+            "location": badge.get("location") or "",
+            "trip_type": badge.get("trip_type") or "",
+        }
         badge["badge_emoji"] = compute_badge_emoji(trip_info, rarity)
         result.append(badge)
     return result

@@ -2,6 +2,14 @@
   <div>
     <h1 class="text-xl font-bold mb-4 text-gray-900">個人檔案</h1>
     <div v-if="loading">
+      <!-- User info header skeleton -->
+      <div class="flex items-center gap-3.5 bg-white rounded-2xl p-4 shadow-sm border border-gray-100 mb-4">
+        <div class="skeleton w-14 h-14 rounded-full flex-shrink-0" />
+        <div class="flex-1 space-y-2">
+          <div class="skeleton h-5 w-28 rounded-full" />
+          <div class="skeleton h-3 w-40 rounded-full" />
+        </div>
+      </div>
       <div class="grid grid-cols-2 gap-3 mb-6">
         <div v-for="i in 4" :key="i" class="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
           <div class="skeleton h-8 w-14 rounded mb-2" />
@@ -23,6 +31,25 @@
       <p class="text-xs text-gray-400">{{ error }}</p>
     </div>
     <div v-else-if="data">
+      <!-- User profile header -->
+      <div class="flex items-center gap-3.5 bg-white rounded-2xl p-4 shadow-sm border border-gray-100 mb-4">
+        <div class="relative w-14 h-14 rounded-full overflow-hidden bg-blue-100 flex-shrink-0 flex items-center justify-center border border-gray-200">
+          <img v-if="userAvatar" :src="userAvatar" :alt="userName" class="w-full h-full object-cover" />
+          <span v-else class="text-2xl">👤</span>
+        </div>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2">
+            <h2 class="text-lg font-bold text-gray-900 truncate">{{ userName }}</h2>
+            <span class="text-[10px] px-2 py-0.5 rounded-full font-medium bg-blue-50 text-blue-600 border border-blue-100 shrink-0">
+              個人數據
+            </span>
+          </div>
+          <p class="text-xs text-gray-400 mt-0.5 truncate">
+            首見：{{ firstSeenText }}
+          </p>
+        </div>
+      </div>
+
       <!-- Summary cards -->
       <div class="grid grid-cols-2 gap-3 mb-6">
         <div class="bg-blue-50 border border-blue-100 rounded-2xl p-4 shadow-sm">
@@ -96,18 +123,121 @@
           尚無話題資料
         </div>
       </div>
+
+      <!-- 里程碑 -->
+      <template v-if="milestones && milestones.total">
+        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2 mt-6">🏆 個人里程碑</h2>
+        <div class="grid grid-cols-2 gap-3 mb-6">
+          <div v-if="milestones.nth" class="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+            <p class="text-xs text-gray-400">第 {{ milestones.nth.n.toLocaleString() }} 則達成</p>
+            <p class="text-lg font-bold text-gray-800 mt-0.5">🎉 {{ fmtMs(milestones.nth.timestamp) }}</p>
+          </div>
+          <div v-if="milestones.busiest_day" class="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+            <p class="text-xs text-gray-400">單日最高</p>
+            <p class="text-lg font-bold text-gray-800 mt-0.5">{{ milestones.busiest_day.count }} 則</p>
+            <p class="text-xs text-gray-400">{{ milestones.busiest_day.date }}</p>
+          </div>
+          <div v-if="milestones.longest_streak" class="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+            <p class="text-xs text-gray-400">最長連續發言</p>
+            <p class="text-lg font-bold text-gray-800 mt-0.5">🔥 {{ milestones.longest_streak.days }} 天</p>
+            <p class="text-xs text-gray-400">{{ milestones.longest_streak.start }} ~ {{ milestones.longest_streak.end }}</p>
+          </div>
+          <div class="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+            <p class="text-xs text-gray-400">累積訊息</p>
+            <p class="text-lg font-bold text-gray-800 mt-0.5">{{ milestones.total.toLocaleString() }} 則</p>
+          </div>
+        </div>
+      </template>
+
+      <!-- 成長曲線 -->
+      <template v-if="hasGrowth">
+        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">📈 成長曲線（累積訊息）</h2>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-6">
+          <Line :data="growthLineData" :options="lineOptions" style="max-height:180px" />
+        </div>
+      </template>
+
+      <!-- 情緒曲線 -->
+      <template v-if="hasSentiment">
+        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">😊 情緒曲線（每日平均）</h2>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-6">
+          <Line :data="sentimentLineData" :options="lineOptions" style="max-height:180px" />
+        </div>
+      </template>
+
+      <!-- 社交圈 -->
+      <template v-if="socialCircle.length">
+        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">🤝 你最常互動的人</h2>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 divide-y overflow-hidden mb-6">
+          <div v-for="p in socialCircle" :key="p.user_id" class="px-4 py-3">
+            <div class="flex items-center">
+              <span class="flex-1 text-sm font-medium text-gray-800 truncate">{{ p.name }}</span>
+              <span class="text-sm font-semibold tabular-nums text-gray-500">{{ p.count }} 次互動</span>
+            </div>
+            <div v-if="p.shared_topics.length" class="flex flex-wrap gap-1 mt-1.5">
+              <span v-for="t in p.shared_topics" :key="t"
+                    class="text-[11px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">#{{ t }}</span>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <!-- 旅行足跡 -->
+      <template v-if="footprints.trips.length">
+        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">
+          🗺️ 旅行足跡（參與 {{ footprints.participated }} · 發起 {{ footprints.initiated }}）
+        </h2>
+        <div class="space-y-2 mb-6">
+          <router-link v-for="t in footprints.trips" :key="t.id" :to="`/trips/${t.id}`"
+                       class="flex items-center gap-3 rounded-2xl border p-3"
+                       :class="rarityOf(t.rarity).card">
+            <span class="text-2xl shrink-0">{{ t.badge_emoji }}</span>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-semibold truncate" :class="rarityOf(t.rarity).name">
+                {{ t.title }}
+                <span v-if="t.is_creator" class="text-[10px] align-middle ml-1 px-1.5 py-0.5 rounded-full bg-white/70 text-gray-600">發起</span>
+              </p>
+              <p class="text-xs" :class="rarityOf(t.rarity).date">{{ t.location }} · {{ fmtSec(t.start_date) }}</p>
+            </div>
+          </router-link>
+        </div>
+      </template>
+
+      <!-- 徽章收藏牆 -->
+      <template v-if="badges.length">
+        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">🎖️ 徽章收藏牆（已獲得 {{ badges.length }} 枚）</h2>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-6">
+          <div class="grid grid-cols-4 gap-3">
+            <div v-for="b in badges" :key="b.badge_id || b.trip_id"
+                 class="flex flex-col items-center text-center">
+              <div class="w-14 h-14 rounded-2xl flex items-center justify-center text-3xl border"
+                   :class="rarityOf(b.badge_rarity).card">
+                {{ b.badge_emoji }}
+              </div>
+              <p class="text-[10px] text-gray-500 mt-1 line-clamp-2 leading-tight">{{ b.location || b.badge_name }}</p>
+            </div>
+          </div>
+        </div>
+      </template>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { Bar } from 'vue-chartjs'
-import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Tooltip, Legend } from 'chart.js'
+import { Bar, Line } from 'vue-chartjs'
+import {
+  Chart as ChartJS, CategoryScale, LinearScale, BarElement,
+  LineElement, PointElement, Filler, Tooltip, Legend,
+} from 'chart.js'
 import { api } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
+import { rarityOf } from '@/constants/rarity'
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend)
+ChartJS.register(
+  CategoryScale, LinearScale, BarElement,
+  LineElement, PointElement, Filler, Tooltip, Legend,
+)
 
 const auth = useAuthStore()
 const data = ref<any>(null)
@@ -165,6 +295,70 @@ const hourlyBarData = computed(() => {
 })
 
 const hourlyOptions = { responsive: true, plugins: { legend: { display: false } } }
+
+// ── 成長 / 情緒曲線 ──
+const lineOptions = {
+  responsive: true,
+  plugins: { legend: { display: false } },
+  elements: { point: { radius: 0 } },
+  scales: { x: { ticks: { maxTicksLimit: 6 } } },
+}
+
+const growthLineData = computed(() => {
+  const g = data.value?.growth || []
+  return {
+    labels: g.map((d: any) => d.date),
+    datasets: [{
+      data: g.map((d: any) => d.cumulative),
+      borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.12)',
+      fill: true, tension: 0.3, borderWidth: 2,
+    }],
+  }
+})
+
+const sentimentLineData = computed(() => {
+  const s = data.value?.sentiment_series || []
+  return {
+    labels: s.map((d: any) => d.date),
+    datasets: [{
+      data: s.map((d: any) => d.avg_sentiment),
+      borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.12)',
+      fill: true, tension: 0.3, borderWidth: 2,
+    }],
+  }
+})
+
+// ── 格式化 ──
+function fmtMs(ts: number | null | undefined): string {
+  if (!ts) return ''
+  const d = new Date(ts)
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`
+}
+function fmtSec(ts: number | null | undefined): string {
+  return ts ? fmtMs(ts * 1000) : ''
+}
+
+const milestones = computed(() => data.value?.milestones || null)
+const socialCircle = computed(() => data.value?.social_circle || [])
+const footprints = computed(() => data.value?.footprints || { trips: [], participated: 0, initiated: 0 })
+const badges = computed(() => data.value?.badges || [])
+const hasGrowth = computed(() => (data.value?.growth || []).length > 1)
+const hasSentiment = computed(() => (data.value?.sentiment_series || []).length > 1)
+
+const userName = computed(() => {
+  return auth.displayName || data.value?.display_name || '群組成員'
+})
+
+const userAvatar = computed(() => {
+  return auth.pictureUrl || ''
+})
+
+const firstSeenText = computed(() => {
+  const ts = data.value?.summary?.first_seen
+  if (!ts) return '近期'
+  const d = new Date(ts)
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`
+})
 
 onMounted(async () => {
   try { data.value = await api.profile(auth.userId) }

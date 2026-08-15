@@ -17,11 +17,11 @@ export interface RarityDef {
 
 export const RARITY: Record<RarityKey, RarityDef> = {
   common: {
-    key: 'common', zh: '普通', emoji: '🟢', order: 1,
+    key: 'common', zh: '普通', emoji: '⚪', order: 1,
     card: 'bg-white border-gray-200',
     icon: 'bg-gray-100',
     name: 'text-gray-800',
-    pill: 'bg-gray-100 text-gray-500',
+    pill: 'bg-gray-100 text-gray-600 border border-gray-200',
     date: 'text-gray-400',
     dot: 'bg-gray-300',
   },
@@ -35,31 +35,31 @@ export const RARITY: Record<RarityKey, RarityDef> = {
     dot: 'bg-blue-400',
   },
   super_rare: {
-    key: 'super_rare', zh: '極稀有', emoji: '🟣', order: 3,
-    card: 'bg-purple-50 border-purple-300',
+    key: 'super_rare', zh: '極稀有', emoji: '🟡', order: 3,
+    card: 'bg-amber-50 border-amber-300',
+    icon: 'bg-amber-100',
+    name: 'text-amber-900',
+    pill: 'bg-amber-100 text-amber-700',
+    date: 'text-amber-500',
+    dot: 'bg-amber-400',
+  },
+  epic: {
+    key: 'epic', zh: '史詩', emoji: '🟣', order: 4,
+    card: 'bg-purple-50 border-purple-300 badge-epic',
     icon: 'bg-purple-100',
     name: 'text-purple-900',
     pill: 'bg-purple-100 text-purple-600',
     date: 'text-purple-400',
     dot: 'bg-purple-500',
   },
-  epic: {
-    key: 'epic', zh: '史詩', emoji: '🔴', order: 4,
-    card: 'bg-rose-50 border-rose-300 badge-epic',
+  legendary: {
+    key: 'legendary', zh: '傳說', emoji: '🔴', order: 5,
+    card: 'bg-rose-50 border-rose-300 badge-legendary',
     icon: 'bg-rose-100',
     name: 'text-rose-900',
     pill: 'bg-rose-100 text-rose-600',
     date: 'text-rose-400',
     dot: 'bg-rose-500',
-  },
-  legendary: {
-    key: 'legendary', zh: '傳說', emoji: '🟡', order: 5,
-    card: 'bg-amber-50 border-amber-300 badge-legendary',
-    icon: 'bg-amber-100',
-    name: 'text-amber-900',
-    pill: 'bg-amber-100 text-amber-600',
-    date: 'text-amber-400',
-    dot: 'bg-amber-400',
   },
 }
 

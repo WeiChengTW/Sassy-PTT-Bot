@@ -9,24 +9,39 @@ from travel.trip_crud import get_trip, get_participants
 
 ABROAD_KEYWORDS = {"日本", "韓國", "泰國", "美國", "歐洲", "海外", "法國", "德國", "義大利", "越南", "菲律賓", "馬來西亞", "新加坡", "澳洲", "英國"}
 
-LOCATION_EMOJI: list[tuple[str, str]] = [
-    ("墾丁", "🏖️"), ("海邊", "🏖️"), ("沙灘", "🏖️"), ("海灘", "🏖️"),
-    ("山", "🏔️"), ("登山", "🏔️"), ("玉山", "🏔️"), ("合歡", "🏔️"),
-    ("溫泉", "♨️"),
+THEME_KEYWORDS: list[tuple[str, str]] = [
+    # 具體活動/主題
+    ("火鍋", "🍲"), ("鬆餅", "🥞"), ("美食", "🍜"), ("烤肉", "🍖"), ("吃", "🍽️"),
+    ("水槍", "🔫"), ("保齡球", "🎳"), ("拍貼", "📸"), ("動物園", "🦁"), ("牧場", "🐮"), ("牛", "🐮"),
+    ("傳單", "📄"), ("醉", "🍺"), ("酒", "🍻"), ("舞會", "💃"), ("變裝", "🎭"),
+    ("魔牆人偶", "🃏"), ("戰警", "🦸"), ("水晶", "💎"), ("綠光", "✨"), ("大騙局", "🃏"),
+    ("仙人跳", "💃"), ("合作社", "🏪"), ("匾額", "📜"), ("修抽屜", "🪚"), ("美術", "🎨"),
+    ("學測", "📝"), ("考", "✏️"), ("暑輔", "📚"), ("翹課", "🏃"), ("返校", "🏫"),
+    ("教室", "💻"), ("google", "🌐"), ("地圖", "🗺️"), ("方向燈", "🚗"), ("車", "🚗"),
+    ("火燒車", "🔥"), ("極地", "❄️"), ("求生", "⛺"), ("魔法", "🪄"), ("嚇一跳", "👻"),
+    ("立牌", "🧍"), ("愛心", "💌"), ("小卡", "💌"), ("足跡", "👣"), ("疫情", "😷"),
+    ("飛機", "✈️"), ("男模", "🕺"), ("教授", "🎓"), ("游媽媽", "👩"),
+    # 地點關鍵字
+    ("墾丁", "🏖️"), ("海邊", "🏖️"), ("沙灘", "🏖️"), ("海灘", "🏖️"), ("南灣", "🏖️"), ("澎湖", "🏝️"),
+    ("武嶺", "🏔️"), ("山", "🏔️"), ("登山", "🏔️"), ("玉山", "🏔️"), ("合歡", "🏔️"),
+    ("宜蘭", "🦆"), ("溫泉", "♨️"),
     ("露營", "🏕️"),
     ("日本", "✈️"), ("韓國", "✈️"), ("海外", "✈️"), ("出國", "✈️"),
-    ("夜市", "🌃"), ("台北", "🌃"), ("城市", "🌃"),
+    ("台南", "🏯"), ("夜市", "🌃"), ("台北", "🌃"), ("城市", "🏙️"),
 ]
 
-# 稀有度 5 階（common < rare < super_rare < epic < legendary）。
-# 前端對應常數在 liff/src/constants/rarity.ts —— 兩邊需手動同步。
-RARITY_CIRCLE = {
-    "common": "🟢",
-    "rare": "🔵",
-    "super_rare": "🟣",
-    "epic": "🔴",
-    "legendary": "🟡",
-}
+def compute_badge_emoji(trip: dict, rarity: str = "") -> str:
+    """依旅程標題、地點或類型產生生動的主題 emoji。"""
+    title = trip.get("title") or ""
+    location = trip.get("location") or ""
+    types = trip.get("trip_type") or ""
+    combined = f"{title} {location} {types}"
+
+    for keyword, emoji in THEME_KEYWORDS:
+        if keyword in combined:
+            return emoji
+    return "🎒"
+
 
 RARITY_LABEL = {
     "common": "普通",
@@ -54,17 +69,6 @@ def compute_rarity(trip: dict) -> Literal["common", "rare", "super_rare", "epic"
     if days >= 3:
         return "rare"
     return "common"
-
-
-def compute_badge_emoji(trip: dict, rarity: str) -> str:
-    """依地點 + 稀有度產生 emoji 組合。"""
-    location = trip.get("location") or ""
-    loc_emoji = "🗺️"
-    for keyword, emoji in LOCATION_EMOJI:
-        if keyword in location:
-            loc_emoji = emoji
-            break
-    return f"{loc_emoji}{RARITY_CIRCLE.get(rarity, '🟢')}"
 
 
 def compute_badge_name(trip: dict, user_name: str, rarity: str) -> str:

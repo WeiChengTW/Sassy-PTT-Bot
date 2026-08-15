@@ -11,7 +11,7 @@ from travel.trip_crud import create_trip, add_participants, end_trip
 from travel.badges import award_badges_for_trip
 from travel.stats_extended import (
     get_leaderboard_data, get_interaction_data,
-    get_topics_data, get_profile_data,
+    get_topics_data, get_profile_data, get_profile_extras,
 )
 
 liff_bp = Blueprint("liff", __name__, url_prefix="/liff")
@@ -216,25 +216,26 @@ def trips():
 def trip_detail(trip_id):
     user_id = _get_liff_user_id()
     data = get_trip_detail(trip_id)
-    trip_group_id = data.get("trip", {}).get("group_id")
-    if not trip_group_id:
+    trip = data.get("trip", {})
+    if not trip or not trip.get("id"):
         return jsonify({"error": "not_found"}), 404
+    trip_group_id = trip.get("group_id")
     # 以 trip 所屬群組驗證成員資格：admin 會 bypass（且 ?g= 群組切換一致），
-    # 一般成員必須是該群成員。取代先前過嚴的 context 相等檢查（會讓 admin
-    # 用 ?g= 瀏覽時點進旅程被誤判 cross_group）。
-    err = _require_member(user_id, trip_group_id)
-    if err:
-        return err
+    # 一般成員必須是該群成員。
+    if trip_group_id:
+        err = _require_member(user_id, trip_group_id)
+        if err:
+            return err
     return jsonify(data)
 
 
 @liff_bp.route("/badges/<user_id>")
 def badges(user_id):
     requester = _get_liff_user_id()
-    group_id = _get_liff_group_id()
+    group_id = _resolve_group_id(requester, _get_liff_group_id())
     if not _is_admin(requester) and requester != user_id:
         return _forbid("not_self_or_admin")
-    if not _is_admin(requester):
+    if not _is_admin(requester) and group_id:
         err = _require_member(requester, group_id)
         if err:
             return err
@@ -249,8 +250,9 @@ def admin_create_trip():
     if not _is_admin(user_id):
         return _forbid("not_admin")
     body = request.get_json() or {}
+    group_id = body.get("group_id") or _resolve_group_id(user_id, _get_liff_group_id())
     trip_id = create_trip(
-        group_id=body.get("group_id") or _get_liff_group_id(),
+        group_id=group_id,
         title=body.get("title", ""),
         location=body.get("location", ""),
         start_date=body.get("start_date", 0),
@@ -258,6 +260,39 @@ def admin_create_trip():
         created_by=user_id,
     )
     return jsonify({"trip_id": trip_id, "status": "planning"})
+
+
+@liff_bp.route("/admin/trips/<trip_id>/update", methods=["POST"])
+def admin_update_trip(trip_id):
+    user_id = _get_liff_user_id()
+    if not _is_admin(user_id):
+        return _forbid("not_admin")
+    body = request.get_json() or {}
+    from travel.trip_crud import update_trip
+    try:
+        result = update_trip(
+            trip_id,
+            title=body.get("title"),
+            location=body.get("location"),
+            rarity=body.get("rarity"),
+        )
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@liff_bp.route("/admin/trips/<trip_id>/title", methods=["POST"])
+def admin_update_trip_title(trip_id):
+    user_id = _get_liff_user_id()
+    if not _is_admin(user_id):
+        return _forbid("not_admin")
+    body = request.get_json() or {}
+    new_title = body.get("title", "")
+    if not new_title:
+        return jsonify({"error": "empty_title"}), 400
+    from travel.trip_crud import update_trip_title
+    result = update_trip_title(trip_id, new_title)
+    return jsonify(result)
 
 
 @liff_bp.route("/admin/trips/<trip_id>/participants", methods=["POST"])
@@ -286,6 +321,16 @@ def admin_award_badges(trip_id):
         return _forbid("not_admin")
     awarded = award_badges_for_trip(trip_id)
     return jsonify({"awarded": awarded})
+
+
+@liff_bp.route("/admin/analyze-topics", methods=["POST"])
+def admin_analyze_topics():
+    user_id = _get_liff_user_id()
+    if not _is_admin(user_id):
+        return _forbid("not_admin")
+    from travel.llm_analyzer import run_monthly_analysis
+    updated = run_monthly_analysis()
+    return jsonify({"updated": updated, "success": True})
 
 
 @liff_bp.route("/admin/groups")
@@ -402,4 +447,8 @@ def profile(target_user_id: str):
     group_id = _resolve_group_id(requester, _get_liff_group_id())
     if not _is_admin(requester) and requester != target_user_id:
         return _forbid("not_self_or_admin")
-    return jsonify(get_profile_data(target_user_id, group_id, request.args.get("period", "all")))
+    period = request.args.get("period", "all")
+    return jsonify({
+        **get_profile_data(target_user_id, group_id, period),
+        **get_profile_extras(target_user_id, group_id, period),
+    })

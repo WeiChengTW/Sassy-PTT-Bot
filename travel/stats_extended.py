@@ -147,7 +147,8 @@ def get_interaction_data(group_id: str, period: str = "all") -> dict:
                       COUNT(*) AS count
                FROM messages a
                JOIN messages b ON a.reply_to_message_id = b.line_message_id
-               WHERE a.group_id=? AND b.group_id=? AND a.user_id != b.user_id{pf}
+               WHERE a.group_id=? AND b.group_id=? AND a.user_id != b.user_id
+                 AND a.user_id NOT LIKE 'imported:%' AND b.user_id NOT LIKE 'imported:%'{pf}
                GROUP BY a.user_id, b.user_id
                ORDER BY count DESC LIMIT 40""",
             (group_id, group_id, *pp),
@@ -170,7 +171,7 @@ def get_interaction_data(group_id: str, period: str = "all") -> dict:
         npf, npp = period_filter(period)
         nodes_rows = conn.execute(
             f"""SELECT user_id AS id, user_name AS name, COUNT(*) AS message_count
-               FROM messages WHERE group_id=?{npf}
+               FROM messages WHERE group_id=? AND user_id NOT LIKE 'imported:%'{npf}
                GROUP BY user_id""",
             (group_id, *npp),
         ).fetchall()
@@ -710,6 +711,7 @@ def get_pulse_data(group_id: str, period: str = "all") -> dict:
                FROM messages a
                JOIN messages b ON a.reply_to_message_id = b.line_message_id
                WHERE a.group_id=? AND b.group_id=? AND a.user_id != b.user_id
+                 AND a.user_id NOT LIKE 'imported:%' AND b.user_id NOT LIKE 'imported:%'
                  AND a.timestamp > b.timestamp
                  AND a.timestamp - b.timestamp < 86400000{pf}
                GROUP BY a.user_id
@@ -731,7 +733,7 @@ def get_pulse_data(group_id: str, period: str = "all") -> dict:
         hourly_rows = conn.execute(
             f"""SELECT strftime('%Y-%m-%d %H', timestamp/1000,'unixepoch') AS hour,
                       COUNT(*) AS count
-               FROM messages WHERE group_id=?{mpf}
+               FROM messages WHERE group_id=? AND user_id NOT LIKE 'imported:%'{mpf}
                GROUP BY hour""",
             (group_id, *mpp),
         ).fetchall()

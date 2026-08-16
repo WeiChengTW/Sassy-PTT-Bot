@@ -118,6 +118,11 @@ def _build_windows(msgs: list[dict]) -> list[dict]:
 
 def run(rebuild: bool = False) -> None:
     init_db()
+    try:
+        import torch
+        torch.set_num_threads(os.cpu_count() or 4)
+    except Exception:
+        pass
     emb_fn = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=EMBEDDING_MODEL_NAME)
     client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
 
@@ -154,6 +159,16 @@ def run(rebuild: bool = False) -> None:
     batch_size = 64
     for i in range(0, len(windows), batch_size):
         batch = windows[i:i + batch_size]
+        # 若集合中已有相同 deterministic ID 則略過重複計算 embedding（支援斷點續跑）
+        if not rebuild:
+            try:
+                res = collection.get(ids=[w["id"] for w in batch])
+                existing_ids = set(res.get("ids", []))
+                batch = [w for w in batch if w["id"] not in existing_ids]
+            except Exception:
+                pass
+        if not batch:
+            continue
         try:
             collection.upsert(
                 ids=[w["id"] for w in batch],

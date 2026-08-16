@@ -4,9 +4,9 @@
 
 ## 核心理念
 
-- 透過 RAG（Retrieval-Augmented Generation）將真實 PTT 推文注入 LLM Prompt
-- 半語意 few-shot + 對話脈絡感知，產出像鄉民留言串底下神回覆的短句
-- LINE 群組行為模擬真實鄉民「隨緣」特性（不一定每則都回）
+- 透過 RAG（Retrieval-Augmented Generation）將真實 PTT 推文與群組歷史對話記憶注入 LLM Prompt
+- 半語意 few-shot + 對話脈絡感知 + 群組人物別名與事件百科，產出像熟人互嗆、神回覆的短句
+- LINE 群組行為模擬真實鄉民「隨緣」特性（不一定每則都回，但被點名精準開酸）
 - 附帶旅遊 / 徽章 / 群組分析作為「附加價值」，讓群組回頭看得到累積
 
 ## 技術架構
@@ -16,14 +16,14 @@
 | LLM（Primary） | `gemini-3.6-flash-high` via CLIProxyAPI `http://localhost:8317/v1` |
 | LLM（Fallback） | `gpt-5-mini` via CGU API（Primary 掛掉時自動切換） |
 | LLM 共通 | 15s 單次 timeout + 429 retry 3 次 |
-| 向量資料庫 | ChromaDB |
+| 向量資料庫 | ChromaDB（含 PTT 語料與群組對話記憶 `group_memory` 雙 collection） |
 | 嵌入模型 | `sentence-transformers/all-MiniLM-L6-v2` |
 | LINE 框架 | `line-bot-sdk` v3 + Flask webhook |
 | 排程 | APScheduler（每日倒數 / 聚合 / 徽章 + 每週爬蟲 + 每月 LLM 分析） |
 | 後端 | Python 3.11+ |
 | 前端 | Vite + Vue 3 + TypeScript + Tailwind + Pinia + Vue Router |
 | 前端圖表 | Chart.js + vue-chartjs（柱狀 / 圓餅 / 折線）+ D3 v7（力導向網絡圖） |
-| 分析儲存 | SQLite（WAL 模式）：訊息、trip、participant、badge、daily / lifetime stats |
+| 分析儲存 | SQLite（WAL 模式）：訊息、trip、participant、badge、daily / lifetime stats、members |
 
 ### 運作流程（對話引擎）
 
@@ -34,27 +34,30 @@ Bot 不會對每則訊息回應，模擬真實鄉民的「隨緣」：
 | 場景 | 觸發率 |
 |------|--------|
 | LINE 私訊（1:1） | 100% |
-| 群組內 `@bot` 直接提及 | 100% |
+| 群組內 `@bot` 直接提及 | 100%（精準對焦問題，不被前文雜訊干擾） |
 | 群組內 bare `@bot`（無其他文字） | 回 LIFF 旅行回顧按鈕 |
 | 群組內 Admin DM | 回 LIFF 管理員後台按鈕 |
 | 群組內含關鍵字（為什麼、怎麼、推薦、股票、感情⋯⋯等 30+ 詞） | 30% 機率 |
-| 群組其他訊息 | 10% 機率隨機發作 |
+| 群組其他訊息 | 10% 機率隨機發作（短詞附和自動回溯上文主旨插嘴） |
 
-**步驟 B：語料檢索 (RAG)**
+**步驟 B：語料與記憶雙軌檢索 (RAG & Group Memory)**
 
-- 用戶輸入轉向量，在 ChromaDB 約 8.8 萬條 PTT 語料中語義搜索
-- **Top 1** 標為「真實推文範例」（給 LLM 看一段真的 PTT 推文怎麼寫）
-- **Top 2-3** 標為「其他相關語料」，作為風格參考
+- **PTT 語料檢索**：用戶輸入轉向量，在 ChromaDB 約 8.8 萬條 PTT 語料中語義搜索
+  - **Top 1** 標為「真實推文範例」
+  - **Top 2-3** 標為「其他相關語料」，作為風格參考
+- **群組記憶與實體檢索**：
+  - **人物與外號對照**：載入 `data/aliases.json`，精確識別發言者與被提及者本名/綽號與代表作
+  - **重大歷史事件百科**：載入 `data/events.json` 與 SQLite 對話紀錄，檢索經典黑歷史與名言佳句
+  - **向量記憶檢索**：在 `group_memory` 向量庫中檢索相關對話視窗
 
 **步驟 C：毒舌生成**
 
 - **半語意 few-shot**：對 15 個 example Q&A 算 2-gram overlap，取 top 2 語意相近 + 3 個隨機，混搭後塞 prompt
-- **對話 window**：每個 chat（群組 / 私訊）保留最近 10 則訊息，user 訊息前綴 sender display_name（例如 `Alice 說：「三小」`）
-- **Anti-repeat**：當下 prompt 內附「前幾輪 bot 已用過的句型」列表，強迫模型換花樣
-- **System prompt**：PTT 鄉民人設 + 強制「回應必須呼應 / 引用 user 訊息具體字詞，不可產生罐頭回應」
-- **Sender 標記**：LINE 群組 lazy fetch `get_group_member_profile` 並 cache，私訊用 `get_profile`
-- 後處理：移除 PTT 標記符號，只取第一行；觸發安全過濾時自動替換為人設台詞
-- **LINE**：回應時自動帶 `quote_token` 引用觸發的那則訊息
+- **短句回溯對齊**：若群友發「會」「真的」「笑死」等短附和詞觸發，自動往前鎖定最近有實質內容的話題
+- **對話 window**：群聊保留最近對話歷史，訊息前綴 sender display_name（例如 `Alice 說：「三小」`）
+- **Anti-repeat**：當下 prompt 附帶「前幾輪 bot 已用過的回應」，強迫模型切換不同切入點與句型
+- **System prompt**：PTT 鄉民 + 群內毒舌老友雙重人設，指名道姓精準開酸，杜絕捏造假人名與罐頭話
+- **LINE 引用回覆**：回應時自動帶 `quote_token` 引用觸發的那則訊息
 
 **步驟 D：LLM 雙 Provider**
 

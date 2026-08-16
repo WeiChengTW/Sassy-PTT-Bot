@@ -22,6 +22,7 @@ ptt_vector_db/
 data/
 # LINE 群組匯出聊天記錄（私人資料，體積大）
 [[]LINE[]]*.txt
+raw_message/
 
 # 日誌
 bot.log

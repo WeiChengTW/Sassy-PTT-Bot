@@ -38,7 +38,7 @@ TZ = timezone(timedelta(hours=8))  # Asia/Taipei
 # KNOWN_BOTS（已知機器人 / 非真人發言者）由 corpus_config 共用，預設略過除非 --keep-bots
 
 DATE_RE = re.compile(r"^(\d{4})/(\d{2})/(\d{2})（.）\s*$")
-MSG_RE = re.compile(r"^(\d{2}):(\d{2})\t([^\t]*)\t(.*)$")
+MSG_RE = re.compile(r"^(?:(上午|下午|AM|PM)\s*)?(\d{1,2}):(\d{2})\t([^\t]*)\t(.*)$")
 
 # 內容 → 訊息 type 對照（媒體只留標記）
 MEDIA_TYPE = {
@@ -75,9 +75,14 @@ def parse(path: str):
                 continue
             mm = MSG_RE.match(line)
             if mm and cur_date:
-                hh, mi = int(mm.group(1)), int(mm.group(2))
-                name = mm.group(3).strip()
-                content = mm.group(4)
+                period = mm.group(1)
+                hh, mi = int(mm.group(2)), int(mm.group(3))
+                if period in ("下午", "PM") and hh < 12:
+                    hh += 12
+                elif period in ("上午", "AM") and hh == 12:
+                    hh = 0
+                name = mm.group(4).strip()
+                content = mm.group(5)
                 # 毫秒，與 LINE webhook live 訊息一致
                 ts = int(datetime(cur_date[0], cur_date[1], cur_date[2],
                                   hh, mi, tzinfo=TZ).timestamp()) * 1000
@@ -158,7 +163,7 @@ def dry_run(messages, system, keep_bots):
         print(f"  {t:%Y-%m-%d %H:%M}  {m['user_name']:<8} [{m['type']}] {preview}")
 
 
-def do_import(messages, keep_bots):
+def do_import(messages, keep_bots, no_members=False):
     from travel.db import get_conn, init_db
     init_db()
     kept = [m for m in messages if keep_bots or m["user_name"] not in KNOWN_BOTS]
@@ -180,7 +185,7 @@ def do_import(messages, keep_bots):
             "SELECT display_name, user_id FROM members WHERE group_id=?", (GROUP_ID,)
         ):
             name_to_id[r["display_name"]] = r["user_id"]
-        # 再用 live messages 的真實 user_id 覆蓋（U 開頭優先於 manual: 合成）
+        # 再用 live messages 的真實 user_id 覆蓋（U 開頭優先於 manual:/imported: 合成）
         for r in conn.execute(
             "SELECT user_name, user_id FROM messages WHERE group_id=? "
             "AND line_message_id NOT LIKE 'import:%' AND user_name IS NOT NULL "
@@ -188,13 +193,13 @@ def do_import(messages, keep_bots):
             (GROUP_ID,),
         ):
             existing = name_to_id.get(r["user_name"])
-            if existing is None or existing.startswith("manual:"):
+            if existing is None or existing.startswith(("manual:", "imported:")):
                 name_to_id[r["user_name"]] = r["user_id"]
 
         for m in kept:
             name = m["user_name"]
             if name not in name_to_id:
-                name_to_id[name] = f"manual:{uuid.uuid4().hex[:8]}"
+                name_to_id[name] = f"imported:{uuid.uuid4().hex[:8]}"
             uid = name_to_id[name]
             ts = m["timestamp"]
             seq = seen_ts[ts]
@@ -212,27 +217,28 @@ def do_import(messages, keep_bots):
             except Exception:
                 dup += 1
 
-        # members upsert（合成 id 者 resolved=0，日後 reconcile 接回）
-        import time
-        now = int(time.time())
-        for name, uid in name_to_id.items():
-            if keep_bots is False and name in KNOWN_BOTS:
-                continue
-            exists = conn.execute(
-                "SELECT 1 FROM members WHERE group_id=? AND display_name=?",
-                (GROUP_ID, name),
-            ).fetchone()
-            if exists:
-                continue
-            resolved = 0 if uid.startswith("manual:") else 1
-            source = "manual" if uid.startswith("manual:") else "auto"
-            conn.execute(
-                """INSERT INTO members
-                   (group_id, user_id, display_name, source, resolved, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (GROUP_ID, uid, name, source, resolved, now),
-            )
-    print(f"匯入完成：inserted={inserted}, 跳過重複={dup}, 保留發言者={len(name_to_id)}")
+        # members upsert（若未指定 no_members；合成 id 者 resolved=0，日後 reconcile 接回）
+        if not no_members:
+            import time
+            now = int(time.time())
+            for name, uid in name_to_id.items():
+                if keep_bots is False and name in KNOWN_BOTS:
+                    continue
+                exists = conn.execute(
+                    "SELECT 1 FROM members WHERE group_id=? AND display_name=?",
+                    (GROUP_ID, name),
+                ).fetchone()
+                if exists:
+                    continue
+                resolved = 0 if uid.startswith(("manual:", "imported:")) else 1
+                source = "manual" if uid.startswith(("manual:", "imported:")) else "auto"
+                conn.execute(
+                    """INSERT INTO members
+                       (group_id, user_id, display_name, source, resolved, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (GROUP_ID, uid, name, source, resolved, now),
+                )
+    print(f"匯入完成：inserted={inserted}, 跳過重複={dup}, 保留發言者={len(name_to_id)}, 寫入members={not no_members}")
 
 
 def main():
@@ -240,13 +246,14 @@ def main():
     ap.add_argument("--file", required=True)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--keep-bots", action="store_true", help="連機器人一起匯入")
+    ap.add_argument("--no-members", action="store_true", help="只匯入訊息進 messages，不將發言者加入 members 名冊")
     args = ap.parse_args()
 
     messages, system = parse(args.file)
     if args.dry_run:
         dry_run(messages, system, args.keep_bots)
     else:
-        do_import(messages, args.keep_bots)
+        do_import(messages, args.keep_bots, args.no_members)
 
 
 if __name__ == "__main__":

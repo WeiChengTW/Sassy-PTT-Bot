@@ -10,15 +10,15 @@ from travel.trip_types import parse_trip_types
 
 
 def get_dashboard_data(group_id: str, days: int = 30, period: str = "all") -> dict:
-    """回傳群組儀表板資料。period 過濾套用於逐訊息統計。"""
+    """回傳群組儀表板資料。period 過濾套用於逐訊息統計，排除非正式成員的純記憶匯入訊息。"""
     since_ms = int((time.time() - days * 86400) * 1000)
     pf, pp = period_filter(period)
     with get_conn() as conn:
         total = conn.execute(
-            f"SELECT COUNT(*) FROM messages WHERE group_id=?{pf}", (group_id, *pp)
+            f"SELECT COUNT(*) FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'", (group_id, *pp)
         ).fetchone()[0]
         member_count = conn.execute(
-            f"SELECT COUNT(DISTINCT user_id) FROM messages WHERE group_id=?{pf}",
+            f"SELECT COUNT(DISTINCT user_id) FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'",
             (group_id, *pp),
         ).fetchone()[0]
         active_trips = conn.execute(
@@ -26,21 +26,21 @@ def get_dashboard_data(group_id: str, days: int = 30, period: str = "all") -> di
         ).fetchone()[0]
         active_days = conn.execute(
             f"""SELECT COUNT(DISTINCT date(timestamp/1000, 'unixepoch'))
-               FROM messages WHERE group_id=?{pf}""",
+               FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'""",
             (group_id, *pp),
         ).fetchone()[0]
 
         top_users = conn.execute(
             f"""SELECT user_id, user_name, COUNT(*) AS total,
                       COUNT(DISTINCT date(timestamp/1000,'unixepoch')) AS active_days
-               FROM messages WHERE group_id=?{pf}
+               FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'
                GROUP BY user_id ORDER BY total DESC LIMIT 10""",
             (group_id, *pp),
         ).fetchall()
 
         type_dist = conn.execute(
             f"""SELECT type, COUNT(*) AS count FROM messages
-               WHERE group_id=?{pf} GROUP BY type ORDER BY count DESC""",
+               WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%' GROUP BY type ORDER BY count DESC""",
             (group_id, *pp),
         ).fetchall()
 
@@ -48,14 +48,14 @@ def get_dashboard_data(group_id: str, days: int = 30, period: str = "all") -> di
         if pf:
             daily_counts = conn.execute(
                 f"""SELECT date(timestamp/1000,'unixepoch') AS date, COUNT(*) AS count
-                   FROM messages WHERE group_id=?{pf}
+                   FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'
                    GROUP BY date ORDER BY date ASC""",
                 (group_id, *pp),
             ).fetchall()
         else:
             daily_counts = conn.execute(
                 """SELECT date(timestamp/1000,'unixepoch') AS date, COUNT(*) AS count
-                   FROM messages WHERE group_id=? AND timestamp >= ?
+                   FROM messages WHERE group_id=? AND timestamp >= ? AND user_id NOT LIKE 'imported:%'
                    GROUP BY date ORDER BY date ASC""",
                 (group_id, since_ms),
             ).fetchall()
@@ -64,7 +64,7 @@ def get_dashboard_data(group_id: str, days: int = 30, period: str = "all") -> di
             f"""SELECT CAST(strftime('%w', timestamp/1000,'unixepoch') AS INTEGER) AS day_of_week,
                       CAST(strftime('%H', timestamp/1000,'unixepoch') AS INTEGER) AS hour,
                       COUNT(*) AS count
-               FROM messages WHERE group_id=?{pf}
+               FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'
                GROUP BY day_of_week, hour""",
             (group_id, *pp),
         ).fetchall()
@@ -74,7 +74,7 @@ def get_dashboard_data(group_id: str, days: int = 30, period: str = "all") -> di
             f"""SELECT date(timestamp/1000,'unixepoch') AS date,
                       CAST(strftime('%H', timestamp/1000,'unixepoch') AS INTEGER) AS hour,
                       COUNT(*) AS count
-               FROM messages WHERE group_id=?{pf}
+               FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'
                GROUP BY date, hour ORDER BY date DESC, hour ASC""",
             (group_id, *pp),
         ).fetchall()

@@ -398,10 +398,11 @@ def admin_members():
         ).fetchall()
         members = [dict(r) for r in rows]
         known = {m["user_id"] for m in members}
-        # 安全網：把已說話但不在 members 表的送信者補進來。
+        # 安全網：把已說話但不在 members 表的送信者補進來（排除純匯入的合成 id）。
         senders = conn.execute(
             """SELECT user_id, user_name, COUNT(*) AS msg_count
                FROM messages WHERE group_id=? AND user_name IS NOT NULL
+                 AND user_id NOT LIKE 'imported:%'
                GROUP BY user_id ORDER BY msg_count DESC""",
             (group_id,),
         ).fetchall()

@@ -34,3 +34,28 @@ GROUP_MEMORY_COLLECTION = "group_memory"
 GROUP_WINDOW_MAX_MSGS = 8      # 每個對話視窗最多幾則訊息
 GROUP_WINDOW_GAP_SEC = 600     # 訊息間隔超過此秒數（10 分鐘）就切新視窗
 GROUP_MIN_WINDOW_CHARS = 12    # 視窗內容太短就丟棄（純「好」「哈哈」）
+
+ALIASES_FILE_PATH = Path(__file__).resolve().parent / "data" / "aliases.json"
+EVENTS_FILE_PATH = Path(__file__).resolve().parent / "data" / "events.json"
+
+
+def load_aliases() -> dict[str, dict]:
+    """載入群組成員外號與別名設定檔。"""
+    import json
+    if not ALIASES_FILE_PATH.exists():
+        return {}
+    try:
+        return json.loads(ALIASES_FILE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def load_events() -> list[dict]:
+    """載入群組重大事件百科（含關鍵字、參與者與原始對話 raw_snippets）。"""
+    import json
+    if not EVENTS_FILE_PATH.exists():
+        return []
+    try:
+        return json.loads(EVENTS_FILE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return []

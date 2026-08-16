@@ -108,11 +108,16 @@ LIFF_ID = os.getenv("LIFF_ID", "")
 LIFF_URL = f"https://liff.line.me/{LIFF_ID}" if LIFF_ID else "https://liff.line.me/placeholder"
 
 SYSTEM_PROMPT = (
-    "你是一個創意寫作角色：PTT 八卦板的資深鄉民。\n"
+    "你是一個創意寫作角色：PTT 八卦板的資深鄉民，也是這個 LINE 朋友群組裡嘴最賤的老朋友。\n"
     "這個角色說話風格極簡短、犀利、帶有台灣網路黑話和鄉民幽默感。\n"
-    "回應必須呼應或引用 user 訊息裡的具體字詞/主題，不可產生通用罐頭回應。\n"
-    "不要重複前幾輪已用過的句型或起手式。\n"
-    "只輸出角色的一句話回應，不加解釋、不加標籤、不加引導文字。\n"
+    "你的任務是看著群裡最近這波對話，順著大家的聊天氛圍與最新發言插嘴一句神吐槽。\n"
+    "原則：\n"
+    "1. 認準是誰在說話！吐槽時若要點名發話者，務必對準發話者的名字（例如陳諾威說話就嗆陳諾威，不要把別人的名字套到他頭上）。\n"
+    "2. 嚴禁捏造不存在的假人名或假事實！若群組回憶已有確切人物（例如英文老師就是黃心如/外號水晶），必須基於真實記憶與名言語錄開酸。\n"
+    "3. 綜觀這波對話的整體情境與話題本質來吐槽，不要被最後一個單字（如『會』『對』『好』）綁死。\n"
+    "4. 鼓勵適度指名道姓、自然引用群組回憶或群友黑歷史開酸（例如：『鄒易庭不就...』、『楊哲嘉你...』），讓吐槽更有老朋友互嗆的臨場感。\n"
+    "5. 不要重複前幾輪已用過的句型或起手式。\n"
+    "6. 只輸出角色的一句話回應，不加解釋、不加標籤、不加引導文字。\n"
     "風格參考：直接點評事情本質，用輕描淡寫的方式諷刺，像是在 PTT 留言串底下的神回覆。"
 )
 
@@ -169,6 +174,29 @@ def should_trigger(text, always=False):
 
 # ── Bot trigger helpers（module-level 可獨立測試）──────────────────────────
 
+_SHORT_FILLERS = {
+    "會", "對", "好", "笑死", "真的", "確實", "+1", "是喔", "屁啦", "幹", "靠北",
+    "沒差", "酷", "讚", "嗚嗚", "不知道", "可以", "不行", "超盤", "還好", "確實是",
+    "笑死我", "好喔", "好啊", "也是", "沒錯", "真假", "假的", "誇張", "真假啦", "哭啊",
+}
+
+
+def _resolve_context_for_short_message(user_text: str, history: list[dict]) -> str | None:
+    """若 user_text 是短附和/回答詞，從最近對話歷史往前找最近一則有實質內容的話題句。"""
+    clean = user_text.strip()
+    if len(clean) > 4 and clean not in _SHORT_FILLERS:
+        return None
+    # 往回找最近一則有實質主題內容的句子
+    user_turns = [t for t in history if t.get("role") == "user"]
+    candidates = user_turns[:-1] if user_turns and user_turns[-1].get("text", "").strip() == clean else user_turns
+    for t in reversed(candidates):
+        text = t.get("text", "").strip()
+        if len(text) > 3 and text not in _SHORT_FILLERS:
+            sender = t.get("sender", "群友")
+            return f"{sender} 說的「{text}」"
+    return None
+
+
 def is_group_bare_mention(event) -> bool:
     """True if group event with only @mention(s) and no other text."""
     if not getattr(event.source, 'group_id', None):
@@ -193,6 +221,17 @@ def is_admin_dm(event) -> bool:
         if uid.strip()
     }
     return getattr(event.source, 'user_id', '') in admin_ids
+
+
+def _get_group_alias_data() -> tuple[dict[str, list[str]], dict[str, dict]]:
+    from corpus_config import load_aliases
+    raw = load_aliases()
+    if not raw:
+        return {}, {}
+    alias_map = {k: v.get("aliases", []) for k, v in raw.items()}
+    return alias_map, raw
+
+GROUP_ALIAS_MAP, GROUP_ALIAS_META = _get_group_alias_data()
 
 
 class SassyBrain:
@@ -224,8 +263,8 @@ class SassyBrain:
         else:
             self.fallback_client = None
             logger.warning("[LLM] CGU_LLM_API_KEY 未設定，fallback 停用")
-        self._llm_sem = threading.Semaphore(2)       # @mention 排隊用
-        self._spontaneous_lock = threading.Lock()    # 70%/10% 觸發：同時只能一個，否則跳過
+        self._llm_sem = threading.Semaphore(3)       # @mention / 私訊排隊用
+        self._spontaneous_lock = threading.Lock()    # 隨機觸發防並發重疊
 
         self._chat_histories: dict[str, list[dict]] = {}  # chat_id → [{"sender", "text", "role"}, ...]
         self._user_names: dict[str, str] = {}       # LINE user_id → display_name (lazy fetch + cache)
@@ -685,19 +724,19 @@ class SassyBrain:
                         logger.warning(f"[LLM] semaphore 等超過 {_LLM_SEM_TIMEOUT}s，跳過此次 mention")
                         return
                     try:
-                        response = asyncio.run(self.generate_response(clean_text, chat_id=line_chat_id))
+                        response = asyncio.run(self.generate_response(clean_text, chat_id=line_chat_id, sender=sender, is_direct=True))
                         do_reply(response)
                     finally:
                         self._llm_sem.release()
                 threading.Thread(target=reply_mention, daemon=True).start()
             else:
-                # 30%/10% 觸發：搶不到 lock 就跳過
+                # 30%/10% spontaneous 觸發：搶不到 lock 就跳過，避免同時多隻線程搶著回
                 def reply_spontaneous():
                     if not self._spontaneous_lock.acquire(blocking=False):
                         logger.info("spontaneous 觸發跳過（已有處理中）")
                         return
                     try:
-                        response = asyncio.run(self.generate_response(clean_text, chat_id=line_chat_id))
+                        response = asyncio.run(self.generate_response(clean_text, chat_id=line_chat_id, sender=sender, is_direct=False))
                         do_reply(response)
                     finally:
                         self._spontaneous_lock.release()
@@ -717,15 +756,233 @@ class SassyBrain:
             logger.error(f"檢索失敗: {e}")
             return None, []
 
-    def get_group_snippets(self, query, n_results=2):
-        """檢索主群組記憶（對話視窗）。失敗一律靜默回 []，不可影響主回覆。"""
-        try:
-            results = self.group_collection.query(query_texts=[query], n_results=n_results)
-            docs = results['documents'][0] if results['documents'] else []
-            return docs or []
-        except Exception as e:
-            logger.warning(f"群組記憶檢索失敗（略過）: {e}")
+    def _get_known_speakers(self) -> list[str]:
+        """快取資料庫中出現過的所有發言者名稱。"""
+        if not hasattr(self, "_cached_speakers") or not self._cached_speakers:
+            try:
+                from travel.db import get_conn
+                with get_conn() as conn:
+                    rows = conn.execute(
+                        "SELECT DISTINCT user_name FROM messages WHERE user_name IS NOT NULL AND user_name != ''"
+                    ).fetchall()
+                    self._cached_speakers = [r["user_name"].strip() for r in rows if r["user_name"].strip()]
+            except Exception:
+                self._cached_speakers = []
+        return self._cached_speakers
+
+    def _find_mentioned_members(self, text: str) -> list[str]:
+        """偵測文字中提及的群成員（支援外號/別名對照表、精確名稱與 2-3 字錯字/同音字匹配）。"""
+        import difflib
+        found = []
+        seen = set()
+        clean = text.strip()
+
+        # 0. 優先查找外號/別名對照表
+        for canonical, aliases in GROUP_ALIAS_MAP.items():
+            if canonical in clean and canonical not in seen:
+                found.append(canonical)
+                seen.add(canonical)
+            for a in aliases:
+                if a in clean and canonical not in seen:
+                    found.append(canonical)
+                    seen.add(canonical)
+
+        if found:
+            return found
+
+        speakers = self._get_known_speakers()
+        if not speakers:
             return []
+
+        # 1. 精確包含 (長度 >= 2)
+        for s in speakers:
+            if len(s) >= 2 and s in clean and s not in seen:
+                found.append(s)
+                seen.add(s)
+        if found:
+            return found
+
+        # 2. 針對 2-4 字人名的模糊匹配 (例如 周易庭 -> 鄒易庭)
+        candidates = []
+        for s in speakers:
+            if len(s) < 2 or s in seen:
+                continue
+            common = sum(1 for c in s if c in clean)
+            if common >= 2 and len(s) <= 4:
+                ratio = difflib.SequenceMatcher(None, clean, s).ratio()
+                candidates.append((common, ratio, s))
+        candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        for c in candidates[:2]:
+            found.append(c[2])
+            seen.add(c[2])
+        return found
+
+    def get_group_snippets(self, query, history_text="", n_results=2):
+        """檢索主群組記憶（對話視窗），支援關鍵人物與語意向量混合檢索。
+
+        query 為檢索文字；若有帶 history_text 則結合查詢。
+        失敗一律靜默回 []，不可影響主回覆。
+        """
+        person_snippets: list[str] = []
+        vector_snippets: list[str] = []
+
+        # 1. 人名與關鍵事件百科檢索（Skill 化精確載入）
+        try:
+            from travel.db import get_conn
+            from corpus_config import load_events
+            full_text = f"{query} {history_text}".strip()
+            
+            # A. 事件百科匹配 (Event Knowledge Base)
+            events = load_events()
+            for ev in events:
+                hit = any(kw in full_text for kw in ev.get("keywords", []))
+                if not hit and any(ch in query for ch in ev.get("characters", [])):
+                    # 若直接在問這個人，且事件包含該人
+                    hit = True
+                if hit:
+                    ev_doc = (
+                        f"【群組重大歷史事件：{ev['name']}】\n"
+                        f"事件重點：{ev['summary']}\n"
+                        f"經典原始對話：\n" + "\n".join(ev.get("raw_snippets", []))
+                    )
+                    if ev_doc not in person_snippets:
+                        person_snippets.append(ev_doc)
+
+            # B. 人物百科與外號匹配 (Character Sheet & Alias Map)
+            matched = self._find_mentioned_members(full_text)
+            with get_conn() as conn:
+                if matched:
+                    for member_name in matched[:2]:
+                        meta = GROUP_ALIAS_META.get(member_name, {})
+                        desc = meta.get("description", "")
+                        lore = meta.get("lore", [])
+                        aliases = [member_name] + GROUP_ALIAS_MAP.get(member_name, [])
+                        alias_str = "、".join(aliases)
+                        alias_conditions = " OR ".join("user_name=?" for _ in aliases)
+                        
+                        # 注入清晰的外號/本名與事蹟
+                        lore_text = "；事蹟：" + " / ".join(lore) if lore else ""
+                        hint = f"群組成員身分：{member_name}（外號/別名：{alias_str}；身分：{desc}{lore_text}）"
+                        if hint not in person_snippets:
+                            person_snippets.append(hint)
+
+                        # 該成員代表性發言
+                        rows_spk = conn.execute(
+                            f"""SELECT content, user_name FROM messages 
+                                WHERE ({alias_conditions}) AND type='text' 
+                                  AND content NOT LIKE '[%' AND LENGTH(content) > 6
+                                ORDER BY LENGTH(content) DESC LIMIT 1""",
+                            tuple(aliases),
+                        ).fetchall()
+                        for r in rows_spk:
+                            c = r["content"].replace("\n", " ")[:150]
+                            person_snippets.append(f"{r['user_name']}: {c}")
+
+                        # 別人提及該成員及其外號的對話
+                        mention_conds = " OR ".join("content LIKE ?" for _ in aliases)
+                        mention_params = [f"%{a}%" for a in aliases]
+                        rows_men = conn.execute(
+                            f"""SELECT user_name, content FROM messages 
+                                WHERE ({mention_conds}) AND type='text'
+                                ORDER BY LENGTH(content) DESC LIMIT 1""",
+                            tuple(mention_params),
+                        ).fetchall()
+                        for r in rows_men:
+                            c = r["content"].replace("\n", " ")[:150]
+                            person_snippets.append(f"{r['user_name']}: {c}")
+
+                # 關鍵字與歷史事件檢索（如：夜店、身分證、酩酊大醉、水晶、黃心如等）
+                import re, time
+                cutoff = int(time.time() * 1000) - 300000  # 排除 5 分鐘內剛發的訊息避免自搜
+                raw_words = re.findall(r'[\u4e00-\u9fff]{2,4}', query)
+                stop_words = {"誰是", "是什麼", "是在", "知道", "幹嘛", "為什麼", "怎樣", "如何", "現在", "之前", "可以", "忘記", "一直", "有人", "是誰"}
+                entity_keywords = [w for w in raw_words if w not in stop_words and (not matched or w not in matched)]
+                # 同義詞擴展（如 英文老師 / 水晶 / 黃心如）
+                if any(k in query for k in ("英文老師", "水晶", "黃心如", "心如")):
+                    for extra in ("水晶", "黃心如"):
+                        if extra not in entity_keywords:
+                            entity_keywords.append(extra)
+
+                # 特殊黑歷史事件專屬對焦（水晶 = 黃心如 = 內湖高中英文老師，《水晶名言佳句》）
+                if any(k in query for k in ("水晶", "黃心如", "心如", "英文老師", "名言", "佳句", "英文課")):
+                    crystal_doc = (
+                        "群組重大實體（群裡提到的『英文老師』一律指黃心如，外號水晶/水晶晶，《水晶名言佳句》主角）：\n"
+                        "《水晶名言佳句精選》：\n"
+                        "1. You can try  2. How old are you  3. I don’t think so  4. 呀～  5. 牛肉字  6. 這是霸凌  7. 你不能說我吵\n"
+                        "8. 我只對事不對人  9. 這是網域問題  10. 直接記警告(17隻警告)  11. 英文三寶：課文筆記 雜誌筆記 勘誤筆記\n"
+                        "12. 各位都是聯發科經理  13. 英文是翹著腳讀的科目  14. 考完可以翹著腳 像呼吸一樣自由  15. 六六大順卷  16. 12大天王\n"
+                        "17. 必勝卷寫完就可以搖著屁股吹口哨  18. 鄒易庭最近壓力有點大 怪怪的 情緒起伏很大 壓力會影響一個人\n"
+                        "「連定煒: 黃心如今天穿披風」\n"
+                        "「洪偉城: 我高中最大的遺憾是沒有把水晶上課錄成podcast」"
+                    )
+                    if crystal_doc not in person_snippets:
+                        person_snippets.append(crystal_doc)
+
+                # 特殊黑歷史事件專屬對焦（夜店 / 酩酊大醉 / 沒帶身分證 / 男廁吐）
+                if any(k in query for k in ("醉", "夜店", "身分證", "身份證", "證件", "男廁", "阿嬤", "下藥")):
+                    rows_night = conn.execute(
+                        """SELECT user_name, content FROM messages 
+                           WHERE timestamp BETWEEN 1757174400000 AND 1757260800000 
+                             AND (content LIKE '%醉%' OR content LIKE '%身分證%' OR content LIKE '%男廁%' OR content LIKE '%夜店%' OR content LIKE '%吐%')
+                           ORDER BY timestamp ASC LIMIT 8"""
+                    ).fetchall()
+                    if rows_night:
+                        doc_night = "群組歷史回憶（2025/9/7 夜店事件）：\n" + "\n".join(f"{rn['user_name']}: {rn['content'].replace(chr(10), ' ')[:100]}" for rn in rows_night)
+                        if doc_night not in person_snippets:
+                            person_snippets.append(doc_night)
+
+                # A. 多關鍵詞交集事件檢索（例如：夜店 + 身分證）
+                if len(entity_keywords) >= 2:
+                    k1, k2 = entity_keywords[0], entity_keywords[1]
+                    rows_multi = conn.execute(
+                        """SELECT timestamp FROM messages 
+                           WHERE (content LIKE ? AND content LIKE ?) AND timestamp < ?
+                             AND content NOT LIKE '%@鍵盤俠%' AND content NOT LIKE '%模型%' AND content NOT LIKE '%AI%' AND content NOT LIKE '%機器人%'
+                           ORDER BY timestamp DESC LIMIT 2""",
+                        (f"%{k1}%", f"%{k2}%", cutoff),
+                    ).fetchall()
+                    for rm in rows_multi:
+                        ts = rm["timestamp"]
+                        win = conn.execute(
+                            """SELECT user_name, content FROM messages 
+                               WHERE timestamp BETWEEN ? AND ? AND content IS NOT NULL
+                               ORDER BY timestamp ASC LIMIT 8""",
+                            (ts - 7200000, ts + 7200000),
+                        ).fetchall()
+                        doc = "\n".join(f"{w['user_name']}: {w['content'].replace(chr(10), ' ')[:100]}" for w in win if len(w['content']) > 1)
+                        if doc and doc not in person_snippets:
+                            person_snippets.append(doc)
+
+                # B. 精確關鍵詞檢索（包含記事本標題，如 彥中哥酩酊大醉.mp4）
+                for kw in entity_keywords[:3]:
+                    rows_kw = conn.execute(
+                        """SELECT timestamp, user_name, content FROM messages 
+                           WHERE content LIKE ? AND timestamp < ? AND content NOT LIKE '@%'
+                             AND content NOT LIKE '%模型%' AND content NOT LIKE '%AI%' AND content NOT LIKE '%機器人%'
+                           ORDER BY timestamp DESC LIMIT 2""",
+                        (f"%{kw}%", cutoff),
+                    ).fetchall()
+                    for r in rows_kw:
+                        c = r["content"].replace("\n", " ")[:200]
+                        line = f"{r['user_name']}: {c}"
+                        if line not in person_snippets:
+                            person_snippets.append(line)
+        except Exception as e:
+            logger.warning(f"實體記憶提取失敗（略過）: {e}")
+
+        # 2. 語意向量檢索補充
+        try:
+            combined = f"{query} {history_text}".strip() if history_text else query.strip()
+            if hasattr(self, "group_collection") and self.group_collection is not None:
+                results = self.group_collection.query(query_texts=[combined], n_results=n_results)
+                docs = results['documents'][0] if results and results.get('documents') else []
+                for d in docs:
+                    if d and d not in person_snippets and d not in vector_snippets:
+                        vector_snippets.append(d)
+        except Exception as e:
+            logger.warning(f"群組記憶向量檢索失敗（略過）: {e}")
+
+        return (person_snippets[:n_results] + vector_snippets[:n_results])[:max(4, n_results * 2)]
 
     def _store_line_event(self, event):
         """從 LINE event 提取資料寫入 SQLite。"""
@@ -876,12 +1133,18 @@ class SassyBrain:
             logger.error(f"[{tag}] FALLBACK 也失敗")
         return None
 
-    async def generate_response(self, user_text, chat_id: str | None = None):
+    async def generate_response(self, user_text, chat_id: str | None = None, sender: str | None = None, is_direct: bool = False):
         if not self.primary_client and not self.fallback_client:
             return "笑死，連 Key 都沒有，你比我還窮。"
 
         import time
         t0 = time.time()
+
+        recent = self._chat_histories.get(chat_id, []) if chat_id else []
+        current_speaker = sender
+        if not current_speaker and recent and recent[-1].get("role") == "user":
+            current_speaker = recent[-1].get("sender")
+        speaker_label = f"{current_speaker} 說：「{user_text}」" if current_speaker else user_text
 
         top_snippet, rest_snippets = self.get_relevant_snippets(user_text)
         push_example = f"真實推文範例：\n「{top_snippet}」\n\n" if top_snippet else ""
@@ -895,14 +1158,21 @@ class SassyBrain:
         group_memory = ""
         group_persona = ""
         if is_main_group:
-            snippets = self.get_group_snippets(user_text)
+            if is_direct:
+                # 點名提問（@bot）：純淨以問題本體檢索，不帶歷史文字干擾
+                snippets = self.get_group_snippets(user_text)
+            else:
+                # 隨機插嘴：若為短詞/附和詞，併入前文話題一同檢索
+                context_hint = _resolve_context_for_short_message(user_text, recent)
+                query_for_memory = f"{context_hint} {user_text}".strip() if context_hint else user_text
+                snippets = self.get_group_snippets(query_for_memory)
             if snippets:
                 bullets = "\n".join(f"「{s}」" for s in snippets)
                 group_memory = (
-                    "群組相關回憶（你們群組以前的對話，可自然引用、不要硬湊）：\n"
+                    "群組相關回憶（可以自然引用當梗吐槽，例如『某某不是才剛...』；引用時可適度指名道姓）：\n"
                     f"{bullets}\n\n"
                 )
-            group_persona = "你也是這個群組的老成員，記得大家以前聊過的事，能自然接梗。\n"
+            group_persona = "你也是這個群組的老成員，記得大家以前聊過的事、認識群裡每個人，能自然接梗並點名吐槽。\n"
 
         cached_news = self._load_news_cache() if hasattr(self, "_news_cache_path") else []
         news_hint = ""
@@ -913,9 +1183,32 @@ class SassyBrain:
         examples = _format_examples(_select_examples(user_text))
         anti_repeat = ""
         if chat_id:
-            recent = self._recent_bot_responses(chat_id, n=3)
-            if recent:
-                anti_repeat = "前幾輪 bot 已用過的句型（不得重複）：\n" + "\n".join(f"- {r}" for r in recent) + "\n\n"
+            recent_resp = self._recent_bot_responses(chat_id, n=3)
+            if recent_resp:
+                anti_repeat = (
+                    "前幾輪 bot 已講過的回應（不得重複相同句型或相同吐槽點，請切入不同角度）：\n"
+                    + "\n".join(f"- {r}" for r in recent_resp)
+                    + "\n\n"
+                )
+
+        if is_direct:
+            # 點名直接提問：直接對焦發問者與問題
+            target_instruction = (
+                f"點名提問：{speaker_label}\n"
+                "請直接針對這個問題與群組相關回憶精準解答並犀利吐槽（認準發問者，適度指名道姓，一句話，不要解釋）："
+            )
+        else:
+            context_topic = _resolve_context_for_short_message(user_text, recent)
+            if context_topic:
+                target_instruction = (
+                    f"最新發言：{speaker_label}（接續前文 {context_topic} 的話題）\n"
+                    "請順著整波群聊話題與最新發言插嘴吐槽（認準是誰在說話，適度指名道姓，一句話，不要解釋）："
+                )
+            else:
+                target_instruction = (
+                    f"最新發言：{speaker_label}\n"
+                    "請順著整波群聊話題與最新發言插嘴吐槽（認準是誰在說話，適度指名道姓，一句話，不要解釋）："
+                )
 
         user_prompt = (
             group_persona
@@ -925,12 +1218,12 @@ class SassyBrain:
             + group_memory
             + news_hint
             + anti_repeat
-            + f"網友說：「{user_text}」\nPTT 酸民的回應（一句話，不要解釋）："
+            + target_instruction
         )
 
-        # 建構訊息列表：system + 對話歷史（帶 sender 標記）+ 當下 prompt
+        # 建構訊息列表：system + 對話歷史（若是 @mention 則不塞前文歷史，避免干擾判斷）+ 當下 prompt
         messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
-        if chat_id:
+        if chat_id and not is_direct:
             messages.extend(self._format_history_for_prompt(chat_id))
         messages.append({"role": "user", "content": user_prompt})
 

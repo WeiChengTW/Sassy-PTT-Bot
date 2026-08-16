@@ -63,14 +63,14 @@ def _cp_sentiment(conn, group_id, period):
     pf, pp = period_filter(period)
     rows = conn.execute(
         f"""SELECT user_id, AVG(sentiment) AS avg_s, COUNT(*) AS cnt
-           FROM messages WHERE group_id=?{pf} AND sentiment IS NOT NULL
+           FROM messages WHERE group_id=?{pf} AND sentiment IS NOT NULL AND user_id NOT LIKE 'imported:%'
            GROUP BY user_id HAVING cnt>=10 ORDER BY avg_s DESC LIMIT 10""",
         (group_id, *pp)).fetchall()
     out = [_row(conn, r["user_id"], round(r["avg_s"], 2),
                f"{r['avg_s']:+.2f}", f"{r['cnt']} 則") for r in rows]
     top = conn.execute(
         f"""SELECT user_id, content, sentiment FROM messages
-           WHERE group_id=?{pf} AND sentiment IS NOT NULL AND content IS NOT NULL
+           WHERE group_id=?{pf} AND sentiment IS NOT NULL AND content IS NOT NULL AND user_id NOT LIKE 'imported:%'
            ORDER BY sentiment DESC LIMIT 1""", (group_id, *pp)).fetchone()
     hi = None
     if top:
@@ -84,7 +84,7 @@ def _cp_streak(conn, group_id, period):
     pf, pp = period_filter(period)
     rows = conn.execute(
         f"""SELECT user_id, date(timestamp/1000,'unixepoch') AS d
-           FROM messages WHERE group_id=?{pf}
+           FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'
            GROUP BY user_id, d ORDER BY user_id, d""", (group_id, *pp)).fetchall()
     per_user: dict[str, list[str]] = {}
     for r in rows:
@@ -112,14 +112,14 @@ def _cp_msg_length(conn, group_id, period):
     pf, pp = period_filter(period)
     rows = conn.execute(
         f"""SELECT user_id, AVG(LENGTH(content)) AS avg_len, COUNT(*) AS cnt
-           FROM messages WHERE group_id=?{pf} AND type='text' AND content IS NOT NULL
+           FROM messages WHERE group_id=?{pf} AND type='text' AND content IS NOT NULL AND user_id NOT LIKE 'imported:%'
            GROUP BY user_id HAVING cnt>=10 ORDER BY avg_len DESC LIMIT 10""",
         (group_id, *pp)).fetchall()
     out = [_row(conn, r["user_id"], round(r["avg_len"]),
                f"{round(r['avg_len'])} 字", f"{r['cnt']} 則") for r in rows]
     top = conn.execute(
         f"""SELECT user_id, LENGTH(content) AS len, content FROM messages
-           WHERE group_id=?{pf} AND type='text' AND content IS NOT NULL
+           WHERE group_id=?{pf} AND type='text' AND content IS NOT NULL AND user_id NOT LIKE 'imported:%'
            ORDER BY len DESC LIMIT 1""", (group_id, *pp)).fetchone()
     hi = None
     if top:
@@ -135,7 +135,7 @@ def _cp_sticker(conn, group_id, period):
         f"""SELECT user_id,
                   SUM(CASE WHEN type='sticker' THEN 1 ELSE 0 END) AS stk,
                   COUNT(*) AS total
-           FROM messages WHERE group_id=?{pf}
+           FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'
            GROUP BY user_id HAVING total>=10
            ORDER BY stk*1.0/total DESC LIMIT 10""", (group_id, *pp)).fetchall()
     out = [_row(conn, r["user_id"], round(r["stk"] * 100.0 / r["total"], 1),
@@ -190,7 +190,7 @@ def _cp_morning(conn, group_id, period):
     pf, pp = period_filter(period)
     rows = conn.execute(
         f"""SELECT user_id, COUNT(*) AS c FROM messages
-           WHERE group_id=?{pf}
+           WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'
              AND CAST(strftime('%H', timestamp/1000, 'unixepoch') AS INTEGER) BETWEEN 5 AND 9
            GROUP BY user_id ORDER BY c DESC LIMIT 10""", (group_id, *pp)).fetchall()
     out = [_row(conn, r["user_id"], r["c"], f"{r['c']} 則") for r in rows]
@@ -209,6 +209,7 @@ def _cp_reply_speed(conn, group_id, period):
            FROM messages m1
            JOIN messages m2 ON m1.reply_to_message_id = m2.line_message_id
            WHERE m1.group_id=? AND m2.group_id=? AND m1.user_id != m2.user_id
+             AND m1.user_id NOT LIKE 'imported:%' AND m2.user_id NOT LIKE 'imported:%'
              AND m1.timestamp >= m2.timestamp{pf}
            GROUP BY m1.user_id HAVING cnt>=3
            ORDER BY avg_min ASC LIMIT 10""", (group_id, group_id, *pp)).fetchall()
@@ -245,7 +246,8 @@ def _cp_terminator(conn, group_id, period):
                     SUM(CASE WHEN next_ts IS NULL OR (next_ts - timestamp) >= ?
                              THEN 1 ELSE 0 END) AS term,
                     COUNT(*) AS total
-             FROM ordered GROUP BY user_id HAVING total>=10
+             FROM ordered WHERE user_id NOT LIKE 'imported:%'
+             GROUP BY user_id HAVING total>=10
              ORDER BY term*1.0/total DESC LIMIT 10""",
         (group_id, *pp, SILENCE_MS)).fetchall()
     out = [_row(conn, r["uid"], round(r["term"] * 100.0 / r["total"], 1),
@@ -258,7 +260,7 @@ def _cp_terminator(conn, group_id, period):
                FROM messages WHERE group_id=?{pf}
              )
              SELECT user_id, content, (next_ts - timestamp) AS gap
-             FROM ordered WHERE next_ts IS NOT NULL
+             FROM ordered WHERE next_ts IS NOT NULL AND user_id NOT LIKE 'imported:%'
              ORDER BY gap DESC LIMIT 1""", (group_id, *pp)).fetchone()
     hi = None
     if top:
@@ -275,7 +277,7 @@ def _cp_initiator(conn, group_id, period):
                   AVG((SELECT COUNT(*) FROM messages r
                        WHERE r.reply_to_message_id=m.line_message_id)) AS avg_replies
            FROM messages m
-           WHERE m.group_id=?{pf} AND m.reply_to_message_id IS NULL
+           WHERE m.group_id=?{pf} AND m.reply_to_message_id IS NULL AND m.user_id NOT LIKE 'imported:%'
            GROUP BY m.user_id ORDER BY initiated DESC LIMIT 10""",
         (group_id, *pp)).fetchall()
     out = [_row(conn, r["uid"], r["initiated"], f"{r['initiated']} 則",
@@ -289,7 +291,7 @@ def _cp_most_replied(conn, group_id, period):
         f"""SELECT m.user_id AS uid, COUNT(*) AS total,
                   SUM((SELECT COUNT(*) FROM messages r
                        WHERE r.reply_to_message_id=m.line_message_id)) AS replies
-           FROM messages m WHERE m.group_id=?{pf}
+           FROM messages m WHERE m.group_id=?{pf} AND m.user_id NOT LIKE 'imported:%'
            GROUP BY m.user_id HAVING total>=10
            ORDER BY replies*1.0/total DESC LIMIT 10""", (group_id, *pp)).fetchall()
     out = [_row(conn, r["uid"], round((r["replies"] or 0) / r["total"], 2),
@@ -308,7 +310,7 @@ def _cp_growth(conn, group_id, period):
         """SELECT user_id,
                  SUM(CASE WHEN timestamp>=? THEN 1 ELSE 0 END) AS this_wk,
                  SUM(CASE WHEN timestamp>=? AND timestamp<? THEN 1 ELSE 0 END) AS last_wk
-           FROM messages WHERE group_id=? AND timestamp>=?
+           FROM messages WHERE group_id=? AND timestamp>=? AND user_id NOT LIKE 'imported:%'
            GROUP BY user_id HAVING last_wk>0
            ORDER BY (this_wk-last_wk)*1.0/last_wk DESC LIMIT 10""",
         (this_start, last_start, this_start, group_id, last_start)).fetchall()
@@ -327,7 +329,7 @@ def _month_top(conn, group_id, ym):
         return []
     return conn.execute(
         """SELECT user_id, COUNT(*) AS c FROM messages
-           WHERE group_id=? AND timestamp>=? AND timestamp<?
+           WHERE group_id=? AND timestamp>=? AND timestamp<? AND user_id NOT LIKE 'imported:%'
            GROUP BY user_id ORDER BY c DESC LIMIT 10""",
         (group_id, start, end)).fetchall()
 
@@ -354,7 +356,7 @@ def _cp_achievements(conn, group_id, period):
     pf, pp = period_filter(period)
     day_rows = conn.execute(
         f"""SELECT user_id, date(timestamp/1000,'unixepoch') AS d, COUNT(*) AS c
-           FROM messages WHERE group_id=?{pf}
+           FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'
            GROUP BY user_id, d""", (group_id, *pp)).fetchall()
     best: dict[str, tuple[int, str]] = {}
     for r in day_rows:
@@ -366,7 +368,7 @@ def _cp_achievements(conn, group_id, period):
     # highlight：最長連擊紀錄
     streak_rows = conn.execute(
         f"""SELECT user_id, date(timestamp/1000,'unixepoch') AS d
-           FROM messages WHERE group_id=?{pf}
+           FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'
            GROUP BY user_id, d ORDER BY user_id, d""", (group_id, *pp)).fetchall()
     per_user: dict[str, list[str]] = {}
     for r in streak_rows:
@@ -396,13 +398,15 @@ def _user_metrics(conn, group_id, period) -> dict:
                   AVG(sentiment) AS avg_s,
                   SUM(CASE WHEN reply_to_message_id IS NULL THEN 1 ELSE 0 END) AS initiated,
                   SUM(CASE WHEN type IN ('image','video') THEN 1 ELSE 0 END) AS media
-           FROM messages WHERE group_id=?{pf} GROUP BY user_id""", (group_id, *pp)).fetchall()
+           FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'
+           GROUP BY user_id""", (group_id, *pp)).fetchall()
     # 被回覆次數（reply self-join，反向）— period 用 m.timestamp 避免與 r 欄位歧義
     mpf, mpp = period_filter(period, "m.timestamp")
     replied = dict(conn.execute(
         f"""SELECT m.user_id, COUNT(r.id) AS c
            FROM messages m JOIN messages r ON r.reply_to_message_id=m.line_message_id
-           WHERE m.group_id=?{mpf} GROUP BY m.user_id""", (group_id, *mpp)).fetchall())
+           WHERE m.group_id=?{mpf} AND m.user_id NOT LIKE 'imported:%'
+           GROUP BY m.user_id""", (group_id, *mpp)).fetchall())
     # 旅行次數（區分 travel 與 event）
     kind_expr = _trip_kind_filter()
     trips_all = conn.execute(

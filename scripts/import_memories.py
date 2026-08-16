@@ -50,9 +50,14 @@ def _load_memories() -> list[dict]:
             "MEMORIES_PATH env 指定其他路徑。"
         )
     with open(MEMORIES_PATH, encoding="utf-8") as f:
-        items = json.load(f)
+        data = json.load(f)
+    # 接受兩種結構：純陣列 [{}, ...]，或物件 {"memories": [...]}（方便加 _doc 等 metadata）
+    if isinstance(data, dict):
+        items = data.get("memories", [])
+    else:
+        items = data
     if not isinstance(items, list):
-        sys.exit(f"{MEMORIES_PATH} 必須是 JSON 陣列")
+        sys.exit(f"{MEMORIES_PATH} 內容格式錯誤：需為 JSON 陣列或含 'memories' 鍵的物件")
     return items
 
 

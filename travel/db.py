@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS messages (
     summary TEXT,
     keywords TEXT,
     analyzed_at INTEGER,
+    sentiment_at INTEGER,
     created_at INTEGER DEFAULT (strftime('%s','now'))
 );
 
@@ -152,6 +153,10 @@ def init_db():
             ).fetchone() else set()
         if cols and "keywords" not in cols:
             conn.execute("ALTER TABLE messages ADD COLUMN keywords TEXT")
+        # 視窗情緒分析的「已處理」標記：中性視窗 sentiment 留 NULL 但仍標記，
+        # 增量排程才不會每次重掃中性視窗（見 travel.sentiment_windows）。
+        if cols and "sentiment_at" not in cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN sentiment_at INTEGER")
         conn.executescript(SCHEMA)
 
 

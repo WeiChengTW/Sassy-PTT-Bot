@@ -9,9 +9,11 @@ from chromadb.utils import embedding_functions
 
 # --- Configuration ---
 _PROJECT_ROOT = Path(__file__).resolve().parent
+from corpus_config import EMBEDDING_MODEL_NAME, CHROMA_DB_PATH
+
 DATA_DIR = str(_PROJECT_ROOT / "PTT-Crawler-master" / "data_Gossiping_2025")
-DB_PATH = str(_PROJECT_ROOT / "PTT-Crawler-master" / "chroma_db")
-MODEL_NAME = "all-MiniLM-L6-v2"
+DB_PATH = CHROMA_DB_PATH
+MODEL_NAME = EMBEDDING_MODEL_NAME  # 多語模型：中文檢索比 all-MiniLM-L6-v2 準
 MAX_DOCUMENTS = 100000  # Cap for performance on old desktop
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

@@ -66,8 +66,12 @@ CLI_PROXY_API_KEY = os.getenv("CLI_PROXY_API_KEY", "")
 PRIMARY_MODEL = os.getenv("PRIMARY_MODEL", "gemini-3.6-flash-high")
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "15.0"))
 
-CHROMA_DB_PATH = str(Path(__file__).resolve().parents[1] / "PTT-Crawler-master" / "chroma_db")
-EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from corpus_config import (
+    CHROMA_DB_PATH,
+    EMBEDDING_MODEL_NAME,
+    GROUP_MEMORY_COLLECTION,
+)
 
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
@@ -197,6 +201,11 @@ class SassyBrain:
             name="ptt_gossip",
             embedding_function=self.emb_fn
         )
+        # 群組記憶（只在主群回覆時使用）
+        self.group_collection = self.chroma.get_or_create_collection(
+            name=GROUP_MEMORY_COLLECTION,
+            embedding_function=self.emb_fn
+        )
         # Primary: CLIProxyAPI 本機 proxy（Gemini 3.6 Flash），失敗 fallback 到 CGU
         if CLI_PROXY_BASE_URL and CLI_PROXY_API_KEY:
             self.primary_client = AsyncOpenAI(api_key=CLI_PROXY_API_KEY, base_url=CLI_PROXY_BASE_URL)
@@ -281,6 +290,15 @@ class SassyBrain:
                 misfire_grace_time=3600,
                 coalesce=True,
             )
+            self._scheduler.add_job(
+                self._run_group_memory_update,
+                trigger='cron',
+                hour=3,
+                minute=30,
+                id='group_memory_update',
+                misfire_grace_time=3600,
+                coalesce=True,
+            )
 
             if os.getenv("TRAVEL_STORAGE_ENABLED", "true").lower() == "true":
                 from travel.llm_analyzer import run_monthly_analysis
@@ -297,6 +315,19 @@ class SassyBrain:
                     coalesce=True,
                 )
                 logger.info("[ANALYZER] 每月 1 號 03:00 LLM 分析排程已啟動")
+
+                from travel.sentiment_windows import run_sentiment_backfill
+                self._scheduler.add_job(
+                    run_sentiment_backfill,  # only_null=True：只評分新視窗（增量）
+                    trigger='cron',
+                    day=1,
+                    hour=3,
+                    minute=30,
+                    id='monthly_sentiment_windows',
+                    misfire_grace_time=3600,
+                    coalesce=True,
+                )
+                logger.info("[SENTIMENT] 每月 1 號 03:30 視窗情緒分析排程已啟動")
 
                 self._scheduler.add_job(
                     run_daily_aggregation,
@@ -683,6 +714,16 @@ class SassyBrain:
             logger.error(f"檢索失敗: {e}")
             return None, []
 
+    def get_group_snippets(self, query, n_results=2):
+        """檢索主群組記憶（對話視窗）。失敗一律靜默回 []，不可影響主回覆。"""
+        try:
+            results = self.group_collection.query(query_texts=[query], n_results=n_results)
+            docs = results['documents'][0] if results['documents'] else []
+            return docs or []
+        except Exception as e:
+            logger.warning(f"群組記憶檢索失敗（略過）: {e}")
+            return []
+
     def _store_line_event(self, event):
         """從 LINE event 提取資料寫入 SQLite。"""
         from travel.db import insert_message
@@ -846,6 +887,20 @@ class SassyBrain:
             bullets = "\n".join(f"「{s}」" for s in rest_snippets)
             rag_context = f"其他相關 PTT 語料（風格參考）：\n{bullets}\n\n"
 
+        # 群組記憶：只在主群回覆時套用；其他群組／私訊維持原本純 PTT 流程
+        is_main_group = bool(LINE_GROUP_ID) and chat_id == LINE_GROUP_ID
+        group_memory = ""
+        group_persona = ""
+        if is_main_group:
+            snippets = self.get_group_snippets(user_text)
+            if snippets:
+                bullets = "\n".join(f"「{s}」" for s in snippets)
+                group_memory = (
+                    "群組相關回憶（你們群組以前的對話，可自然引用、不要硬湊）：\n"
+                    f"{bullets}\n\n"
+                )
+            group_persona = "你也是這個群組的老成員，記得大家以前聊過的事，能自然接梗。\n"
+
         cached_news = self._load_news_cache() if hasattr(self, "_news_cache_path") else []
         news_hint = ""
         if cached_news and random.random() < 0.5:
@@ -860,9 +915,11 @@ class SassyBrain:
                 anti_repeat = "前幾輪 bot 已用過的句型（不得重複）：\n" + "\n".join(f"- {r}" for r in recent) + "\n\n"
 
         user_prompt = (
-            f"以下是 PTT 鄉民的發言風格範例：\n{examples}\n\n"
+            group_persona
+            + f"以下是 PTT 鄉民的發言風格範例：\n{examples}\n\n"
             + push_example
             + rag_context
+            + group_memory
             + news_hint
             + anti_repeat
             + f"網友說：「{user_text}」\nPTT 酸民的回應（一句話，不要解釋）："
@@ -997,7 +1054,7 @@ class SassyBrain:
                 [sys.executable, str(indexer_script)],
                 cwd=str(project_root),
                 check=True,
-                timeout=7200,
+                timeout=18000,  # 多語模型 (L12) 比 L6 慢約 2x，100K 筆約 2.5hr，放寬到 5hr
             )
             logger.info("[WEEKLY_CRAWL] 索引重建完成。")
         except subprocess.TimeoutExpired:
@@ -1006,6 +1063,16 @@ class SassyBrain:
             logger.error(f"[WEEKLY_CRAWL] 失敗 (returncode={e.returncode}): {e}")
         except Exception as e:
             logger.error(f"[WEEKLY_CRAWL] 未預期錯誤: {e}")
+
+    def _run_group_memory_update(self):
+        """每日 03:30 增量把主群新訊息補進 group_memory 向量庫。"""
+        logger.info("[GROUP_MEMORY] 開始增量更新群組記憶...")
+        try:
+            from index_group_memory import run as run_group_memory
+            run_group_memory(rebuild=False)
+            logger.info(f"[GROUP_MEMORY] 更新完成，目前 {self.group_collection.count()} 筆視窗。")
+        except Exception as e:
+            logger.error(f"[GROUP_MEMORY] 更新失敗: {e}")
 
     def _push_line_with_retry(self, message_text: str) -> bool:
         # _request_timeout=10.0：原本無 timeout，曾卡 16 分鐘才被 server 斷線

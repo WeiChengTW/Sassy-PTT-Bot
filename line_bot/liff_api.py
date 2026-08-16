@@ -15,6 +15,7 @@ from travel.stats_extended import (
     get_pulse_data, get_compare_data,
 )
 from travel.leaderboards import get_all_boards
+from travel.cache import cached
 
 liff_bp = Blueprint("liff", __name__, url_prefix="/liff")
 
@@ -200,7 +201,8 @@ def dashboard():
         return err
     days = int(request.args.get("days", 30))
     period = request.args.get("period", "all")
-    data = get_dashboard_data(group_id, days, period)
+    data = cached("dashboard", group_id, f"{period}:{days}",
+                  lambda: get_dashboard_data(group_id, days, period))
     data["group_name"] = _get_group_name(group_id)
     return jsonify(data)
 
@@ -461,7 +463,9 @@ def leaderboards():
     err = _require_member(user_id, group_id)
     if err:
         return err
-    return jsonify(get_all_boards(group_id, request.args.get("period", "all")))
+    period = request.args.get("period", "all")
+    return jsonify(cached("leaderboards", group_id, period,
+                          lambda: get_all_boards(group_id, period)))
 
 
 @liff_bp.route("/interactions")

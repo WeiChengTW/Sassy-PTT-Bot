@@ -33,6 +33,11 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(timestamp);
 CREATE INDEX IF NOT EXISTS idx_messages_user ON messages(user_id);
 CREATE INDEX IF NOT EXISTS idx_messages_group ON messages(group_id);
+-- 排行榜的回覆相關子查詢（initiator/most_replied）靠此索引，缺它在大群組會 O(n²) 卡死。
+CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to_message_id);
+-- 儀表板/排行榜大量 GROUP BY user_id 與時間範圍過濾，複合索引加速。
+CREATE INDEX IF NOT EXISTS idx_msg_grp_ts ON messages(group_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_msg_grp_user ON messages(group_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_messages_travel
     ON messages(is_travel_related) WHERE is_travel_related = 1;
 CREATE INDEX IF NOT EXISTS idx_messages_unanalyzed
@@ -112,6 +117,13 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     PRIMARY KEY (date, group_id)
 );
 CREATE INDEX IF NOT EXISTS idx_daily_stats_date ON daily_stats(date DESC);
+
+-- API 回應快取（排行榜/儀表板等重運算）。stale-while-revalidate：先回舊值再背景重算。
+CREATE TABLE IF NOT EXISTS api_cache (
+    cache_key TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    computed_at INTEGER NOT NULL
+);
 """
 
 

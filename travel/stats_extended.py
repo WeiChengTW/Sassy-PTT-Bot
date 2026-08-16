@@ -1,7 +1,63 @@
 """Phase 3 分析查詢：排行榜、互動關係、話題分析、個人檔案。"""
 import json
+import re
 from travel.db import get_conn
 from travel.period import period_filter
+
+
+# ── 精選語錄選取 ──────────────────────────────────────────────────────────────
+# 視窗情緒分析會把同一個對話視窗（10 分鐘內、最多 4 則）共用同一個 sentiment，
+# 因此撈金句時需過濾「附和短句／純網址／佔位符」，再對同一時段去重並做正負平衡，
+# 避免短句洗版、連環網址、或極端分數全擠在單一情緒側。
+_QUOTE_MIN_LEN = 4                  # 至少 4 字，擋掉「真的」「笑死」等短附和
+_QUOTE_WINDOW_MS = 600 * 1000       # 同視窗判定：對齊 GROUP_WINDOW_GAP_SEC = 600 秒
+_URL_PREFIX_RE = re.compile(r"^https?://", re.IGNORECASE)
+_PLACEHOLDER_RE = re.compile(r"^\[[^\[\]]{1,8}\]$")
+_NOISE_QUOTES = {
+    "哈哈哈哈", "呵呵呵呵", "哈哈哈笑死",
+    "嗯嗯嗯", "哦哦哦", "好喔好喔", "真的真的",
+}
+
+
+def _is_quote_worthy(content) -> bool:
+    """金句基本過濾：有實質文字（≥4 字）、非純網址、非 [貼圖] 佔位符。"""
+    if not content:
+        return False
+    text = content.strip()
+    if len(text) < _QUOTE_MIN_LEN:
+        return False
+    if _URL_PREFIX_RE.match(text):
+        return False
+    if _PLACEHOLDER_RE.match(text):
+        return False
+    if text in _NOISE_QUOTES:
+        return False
+    return True
+
+
+def _dedup_quote_rows(rows: list) -> list:
+    """時間視窗去重：同一時段（10 分鐘內）只留字數最長／最完整的一則。"""
+    out: list = []
+    for r in sorted(rows, key=lambda x: x["timestamp"]):
+        if out and r["timestamp"] - out[-1]["timestamp"] <= _QUOTE_WINDOW_MS:
+            if len((r["content"] or "").strip()) > len((out[-1]["content"] or "").strip()):
+                out[-1] = r
+        else:
+            out.append(r)
+    return out
+
+
+def _balance_quotes(rows: list, limit: int = 10) -> list:
+    """正負平衡：各挑一半（正／負各 limit//2），不足由另一方補齊。"""
+    rows = sorted(rows, key=lambda x: -abs(x["sentiment"]))
+    pos = [r for r in rows if r["sentiment"] >= 0]
+    neg = [r for r in rows if r["sentiment"] < 0]
+    half = limit // 2
+    picked = pos[:half] + neg[:half]
+    remaining = limit - len(picked)
+    if remaining > 0:
+        picked += (pos[half:] + neg[half:])[:remaining]
+    return picked[:limit]
 
 
 def _sentiment_bucket(s: float) -> str:
@@ -183,13 +239,14 @@ def get_topics_data(group_id: str, period: str = "all") -> dict:
             (group_id, *pp),
         ).fetchall()
 
-        # 精選語錄：原話有內容、情緒最鮮明（絕對值最大 = 最正面或最負面）
+        # 精選語錄：撈取情緒最鮮明的一批候選，在 Python 端做內容過濾、
+        # 時間視窗去重與正負平衡（避免同視窗洗榜、純網址、短附和）。
         quote_rows = conn.execute(
             f"""SELECT user_name, content, summary, sentiment, timestamp FROM messages
                WHERE group_id=?{pf} AND type='text'
                  AND content IS NOT NULL AND length(content) > 1
                  AND sentiment IS NOT NULL
-               ORDER BY ABS(sentiment) DESC, timestamp DESC LIMIT 10""",
+               ORDER BY ABS(sentiment) DESC, timestamp DESC LIMIT 200""",
             (group_id, *pp),
         ).fetchall()
 
@@ -277,6 +334,11 @@ def get_topics_data(group_id: str, period: str = "all") -> dict:
         [{"location": k, "count": v} for k, v in loc_counter.items()],
         key=lambda x: -x["count"],
     )[:15]
+
+    quote_rows = _dedup_quote_rows(
+        [r for r in quote_rows if _is_quote_worthy(r["content"])]
+    )
+    quote_rows = _balance_quotes(quote_rows, 10)
 
     highlight_quotes = [
         {"user_name": r["user_name"], "content": r["content"],

@@ -24,15 +24,15 @@ def temp_db(monkeypatch):
 
 def _insert_msg(conn, *, msg_id, group_id="g1", user_id, user_name,
                 msg_type="text", timestamp, reply_to=None,
-                topics=None, sentiment=None):
+                topics=None, sentiment=None, content=None, summary=None):
     conn.execute(
         """INSERT INTO messages
            (line_message_id, group_id, user_id, user_name, type,
-            timestamp, reply_to_message_id, topics, sentiment)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
+            timestamp, reply_to_message_id, topics, sentiment, content, summary)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
         (msg_id, group_id, user_id, user_name, msg_type,
          timestamp, reply_to,
-         json.dumps(topics) if topics else None, sentiment),
+         json.dumps(topics) if topics else None, sentiment, content, summary),
     )
 
 
@@ -147,6 +147,81 @@ def test_topics_weekly_trend(temp_db):
     data = get_topics_data("g1")
     assert len(data["weekly_trend"]) == 1
     assert "旅行" in data["weekly_trend"][0]["topics"]
+
+
+# ─── 精選語錄（highlight_quotes）────────────────────────────────────────────
+
+def test_quotes_filter_out_pure_url_and_short_ack(temp_db):
+    from travel.stats_extended import get_topics_data
+    ts = 1735693200000
+    with get_conn() as conn:
+        _insert_msg(conn, msg_id="url1", user_id="uA", user_name="A",
+                    timestamp=ts, content="https://youtu.be/abc123", sentiment=0.9)
+        _insert_msg(conn, msg_id="ack1", user_id="uB", user_name="B",
+                    timestamp=ts + 1000, content="真的", sentiment=0.8)
+        _insert_msg(conn, msg_id="ok1", user_id="uB", user_name="B",
+                    timestamp=ts + 2000, content="好喔", sentiment=0.8)
+        _insert_msg(conn, msg_id="good1", user_id="uC", user_name="C",
+                    timestamp=ts + 3000, content="這趟真的太扯了啦", sentiment=0.95)
+    data = get_topics_data("g1")
+    contents = [q["content"] for q in data["highlight_quotes"]]
+    assert "這趟真的太扯了啦" in contents
+    assert "https://youtu.be/abc123" not in contents
+    assert "真的" not in contents
+    assert "好喔" not in contents
+
+
+def test_quotes_same_window_only_one_representative(temp_db):
+    from travel.stats_extended import get_topics_data
+    ts = 1735693200000
+    with get_conn() as conn:
+        for i, text in enumerate(["誇張", "這個太扯了吧", "真的假的", "笑死我"]):
+            _insert_msg(conn, msg_id=f"w{i}", user_id="uA", user_name="A",
+                        timestamp=ts + i * 1000, content=text, sentiment=0.9)
+    data = get_topics_data("g1")
+    quotes = [q["content"] for q in data["highlight_quotes"]]
+    # 同一 10 分鐘視窗內只留最長的一則
+    assert len(quotes) == 1
+    assert quotes[0] == "這個太扯了吧"
+
+
+def test_quotes_pos_neg_balanced(temp_db):
+    from travel.stats_extended import get_topics_data
+    ts = 1735693200000
+    with get_conn() as conn:
+        for i in range(5):
+            _insert_msg(conn, msg_id=f"pos{i}", user_id="uA", user_name="A",
+                        timestamp=ts + i * 3600000,
+                        content=f"今天超開心的第{i}天", sentiment=0.7 + i * 0.05)
+        for i in range(5):
+            _insert_msg(conn, msg_id=f"neg{i}", user_id="uA", user_name="A",
+                        timestamp=ts + (10 + i) * 3600000,
+                        content=f"這天氣爛到想哭第{i}天", sentiment=-0.7 - i * 0.05)
+    data = get_topics_data("g1")
+    quotes = data["highlight_quotes"]
+    tones = [q["tone"] for q in quotes]
+    assert len(quotes) == 10
+    assert tones.count("positive") == 5
+    assert tones.count("negative") == 5
+
+
+def test_quotes_balance_fills_from_other_side(temp_db):
+    from travel.stats_extended import get_topics_data
+    ts = 1735693200000
+    with get_conn() as conn:
+        for i in range(8):
+            _insert_msg(conn, msg_id=f"pos{i}", user_id="uA", user_name="A",
+                        timestamp=ts + i * 3600000,
+                        content=f"超讚的第{i}趟旅程", sentiment=0.6 + i * 0.05)
+        _insert_msg(conn, msg_id="neg1", user_id="uA", user_name="A",
+                    timestamp=ts + 9 * 3600000,
+                    content="這爛旅館我一生黑", sentiment=-0.8)
+    data = get_topics_data("g1")
+    quotes = data["highlight_quotes"]
+    assert len(quotes) == 9  # 只有 9 則候選：8 正 1 負
+    tones = [q["tone"] for q in quotes]
+    assert tones.count("negative") == 1
+    assert tones.count("positive") == 8
 
 
 # ─── profile ─────────────────────────────────────────────────────────────────

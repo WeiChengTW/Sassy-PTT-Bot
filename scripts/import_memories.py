@@ -15,12 +15,14 @@ rarity_zh 對照：普通=common / 稀有=rare / 極稀有=super_rare /
     DB_PATH=data/chat.db python scripts/import_memories.py
     MEMORIES_PATH=/path/to/other.json python scripts/import_memories.py
 
-冪等：以 (group_id, title, start_date) 去重，重跑不會重複插入。
+冪等：以 (group_id, start_date) 去重——同一群組同一天只會有一筆記錄。
+注意不可用 title 參與去重：使用者會在 LIFF 改名（travel.trip_crud.update_trip），
+若去重 key 含 title，改名後 memories.json 的舊 title 會對不上，重跑就在同一天
+重複插入一筆空的 planning 記錄。
 """
 import json
 import os
 import sys
-import time
 import uuid
 from datetime import datetime
 
@@ -89,10 +91,33 @@ def parse_dates(date_str: str) -> tuple[int, int | None]:
     return start, end
 
 
+def _insert_if_new(conn, group_id: str, title: str, rarity: str,
+                   start: int, end: int | None) -> bool:
+    """冪等插入單筆記憶。同一群組同一天（start_date）已存在任何旅行就跳過。
+
+    回傳 True 表示有插入；False 表示已存在、跳過。
+    去重刻意不含 title：title 可能被使用者在 LIFF 改名，納入 title 會讓
+    改名後的旅行與 memories.json 對不上而在同一天重複插入。
+    """
+    exists = conn.execute(
+        "SELECT 1 FROM trips WHERE group_id=? AND start_date=?",
+        (group_id, start),
+    ).fetchone()
+    if exists:
+        return False
+    conn.execute(
+        """INSERT INTO trips
+           (id, group_id, title, location, start_date, end_date,
+            trip_type, rarity, created_by, created_at, status)
+           VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, 'import', ?, 'planning')""",
+        (str(uuid.uuid4()), group_id, title, start, end, rarity, start),
+    )
+    return True
+
+
 def main() -> None:
     memories = _load_memories()
     inserted = skipped = 0
-    now = int(time.time())
     with get_conn() as conn:
         for item in memories:
             date_str = item["date"]
@@ -102,21 +127,10 @@ def main() -> None:
                 sys.exit(f"未知稀有度 '{rarity_zh}'（title={title}），允許值：{list(RARITY_ZH)}")
             rarity = RARITY_ZH[rarity_zh]
             start, end = parse_dates(date_str)
-            exists = conn.execute(
-                "SELECT 1 FROM trips WHERE group_id=? AND title=? AND start_date=?",
-                (GROUP_ID, title, start),
-            ).fetchone()
-            if exists:
+            if _insert_if_new(conn, GROUP_ID, title, rarity, start, end):
+                inserted += 1
+            else:
                 skipped += 1
-                continue
-            conn.execute(
-                """INSERT INTO trips
-                   (id, group_id, title, location, start_date, end_date,
-                    trip_type, rarity, created_by, created_at, status)
-                   VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, 'import', ?, 'planning')""",
-                (str(uuid.uuid4()), GROUP_ID, title, start, end, rarity, start),
-            )
-            inserted += 1
     print(f"匯入完成：inserted={inserted}, skipped={skipped}, total={len(memories)}")
 
 

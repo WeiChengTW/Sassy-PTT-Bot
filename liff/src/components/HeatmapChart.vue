@@ -73,7 +73,7 @@
             :key="h"
             class="rounded-sm cursor-pointer transition-transform hover:scale-125"
             :style="weeklyCellColor(row.dow, h - 1)"
-            :title="`週${row.label} ${h - 1}:00 · ${weeklyCountAt(row.dow, h - 1)} 則`"
+            :title="`${recentDowDate(row.dow)} 週${row.label} ${h - 1}:00 · ${weeklyCountAt(row.dow, h - 1)} 則`"
           />
         </div>
       </div>
@@ -110,6 +110,16 @@ const weeklyRows = [
   { dow: 4, label: '四' }, { dow: 5, label: '五' }, { dow: 6, label: '六' },
   { dow: 0, label: '日' },
 ]
+
+function recentDowDate(dow: number): string {
+  const now = new Date()
+  let diff = dow - now.getDay()  // getDay(): 0=日 … 6=六
+  if (diff > 0) diff -= 7        // 往回找，確保日期不超過今天
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + diff)
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${mm}/${dd}`
+}
 
 const cellStyle = { width: '13px', minWidth: '13px', height: '13px' } as const
 

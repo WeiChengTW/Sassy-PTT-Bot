@@ -1,25 +1,31 @@
 <template>
-  <div class="flex flex-col h-[calc(100vh-140px)]">
+  <div class="flex flex-col h-[calc(100vh-145px)] space-y-3">
     <!-- 頂部資訊與過濾 -->
-    <div class="mb-3 flex items-center justify-between">
+    <div class="flex items-center justify-between">
       <div>
-        <h1 class="text-xl font-bold text-gray-900">🌍 足跡地圖</h1>
-        <p class="text-xs text-gray-400 mt-0.5">
-          已探索 <span class="font-semibold text-blue-600">{{ mappedTrips.length }}</span> 個地點足跡
+        <h1 class="text-xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
+          <span>🌍 足跡探索地圖</span>
+        </h1>
+        <p class="text-xs text-slate-400 mt-0.5 font-medium">
+          已探索 <span class="font-bold font-mono text-brand-600">{{ mappedTrips.length }}</span> 個地點足跡
         </p>
       </div>
-      <button @click="fitBounds" class="text-xs px-2.5 py-1.5 bg-white border border-gray-200 rounded-lg shadow-sm font-medium text-gray-600 hover:text-blue-600 active:scale-95 transition-all">
-        🎯 縮放全景
+      <button
+        @click="fitBounds"
+        class="text-xs px-3 py-1.5 bg-white border border-slate-200 rounded-xl shadow-xs font-bold text-slate-600 hover:text-brand-600 hover:border-brand-200 active:scale-95 transition-all btn-press inline-flex items-center gap-1"
+      >
+        <span>🎯</span>
+        <span>全景視角</span>
       </button>
     </div>
 
     <!-- 地圖容器 -->
-    <div class="flex-1 relative rounded-2xl overflow-hidden shadow-md border border-gray-200 bg-slate-100 min-h-[350px]">
+    <div class="flex-1 relative rounded-2xl overflow-hidden shadow-card border border-slate-200/80 bg-slate-100 min-h-[350px]">
       <div id="footprint-map" class="w-full h-full z-10" />
-      <div v-if="loading" class="absolute inset-0 z-20 bg-white/70 backdrop-blur-sm flex items-center justify-center">
+      <div v-if="loading" class="absolute inset-0 z-20 bg-white/70 backdrop-blur-xs flex items-center justify-center">
         <div class="text-center">
-          <p class="text-2xl animate-bounce">🌍</p>
-          <p class="text-xs text-gray-500 font-medium mt-1">載入足跡地圖中...</p>
+          <p class="text-3xl animate-bounce">🌍</p>
+          <p class="text-xs text-slate-500 font-bold mt-2">載入足跡地圖中...</p>
         </div>
       </div>
     </div>
@@ -62,7 +68,6 @@ function initMap() {
 
   L.control.zoom({ position: 'bottomright' }).addTo(map)
 
-  // 使用高質感無標籤底圖 + 標籤層
   L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
     attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
     maxZoom: 19,
@@ -86,14 +91,14 @@ function renderMarkers() {
     const customIcon = L.divIcon({
       className: 'custom-map-pin',
       html: `
-        <div class="relative flex items-center justify-center w-10 h-10 rounded-2xl shadow-lg border-2 border-white transition-transform hover:scale-110 active:scale-95 cursor-pointer ${rarity.card}">
-          <span class="text-xl leading-none">${emoji}</span>
-          <span class="absolute -bottom-1 -right-1 w-3 h-3 rounded-full border border-white ${rarity.dot}"></span>
+        <div class="relative flex items-center justify-center w-11 h-11 rounded-2xl shadow-lift border-2 border-white transition-all hover:scale-115 active:scale-95 cursor-pointer ${rarity.card}">
+          <span class="text-2xl leading-none">${emoji}</span>
+          <span class="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full border-2 border-white ${rarity.dot}"></span>
         </div>
       `,
-      iconSize: [40, 40],
-      iconAnchor: [20, 20],
-      popupAnchor: [0, -22],
+      iconSize: [44, 44],
+      iconAnchor: [22, 22],
+      popupAnchor: [0, -24],
     })
 
     const marker = L.marker(t.coords, { icon: customIcon })
@@ -101,24 +106,24 @@ function renderMarkers() {
     // Popup 內容
     const dt = t.start_date ? new Date(t.start_date * 1000).toLocaleDateString('zh-TW') : ''
     const tagsHtml = (t.trip_types || [])
-      .map((ty: string) => `<span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-blue-50 text-[10px] text-blue-600 font-medium">${emojiFor(ty)} ${labelFor(ty)}</span>`)
+      .map((ty: string) => `<span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-brand-50 text-[10px] text-brand-700 font-semibold border border-brand-100">${emojiFor(ty)} ${labelFor(ty)}</span>`)
       .join(' ')
 
     const popupContent = `
-      <div class="p-1 max-w-[200px] font-sans">
+      <div class="p-1 max-w-[210px] font-sans">
         <div class="flex items-center gap-1.5">
-          <span class="text-base">${emoji}</span>
-          <p class="font-bold text-sm text-gray-900 leading-tight">${t.title}</p>
+          <span class="text-xl">${emoji}</span>
+          <p class="font-bold text-sm text-slate-900 leading-tight">${t.title}</p>
         </div>
-        <p class="text-[11px] text-gray-500 mt-1">📍 ${t.location || '群組回憶'}</p>
-        <p class="text-[10px] text-gray-400 mt-0.5">🗓️ ${dt}</p>
-        <div class="mt-1.5 flex flex-wrap gap-1">${tagsHtml}</div>
-        <a href="/trips/${t.id}" class="mt-2 block w-full text-center bg-blue-600 text-white rounded-lg py-1 text-[11px] font-medium no-underline hover:bg-blue-700">
+        <p class="text-[11px] text-slate-500 font-medium mt-1">📍 ${t.location || '群組回憶'}</p>
+        <p class="text-[10px] text-slate-400 font-mono mt-0.5">🗓️ ${dt}</p>
+        <div class="mt-2 flex flex-wrap gap-1">${tagsHtml}</div>
+        <a href="/trips/${t.id}" class="mt-2.5 block w-full text-center bg-brand-600 hover:bg-brand-700 text-white rounded-xl py-1.5 text-xs font-bold no-underline transition-colors shadow-xs">
           查看事件詳情 →
         </a>
       </div>
     `
-    marker.bindPopup(popupContent, { closeButton: false, minWidth: 160 })
+    marker.bindPopup(popupContent, { closeButton: false, minWidth: 170 })
     if (markerLayer) {
       markerLayer.addLayer(marker)
     }
@@ -164,9 +169,10 @@ onUnmounted(() => {
   border: none;
 }
 .leaflet-popup-content-wrapper {
-  border-radius: 1rem;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
-  border: 1px solid rgba(0, 0, 0, 0.05);
+  border-radius: 1.25rem;
+  box-shadow: 0 20px 40px -12px rgba(15, 23, 42, 0.2);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  padding: 4px;
 }
 .leaflet-popup-content {
   margin: 10px 12px;

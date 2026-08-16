@@ -1,70 +1,92 @@
 <template>
-  <div>
+  <div class="space-y-3">
     <!-- 模式切換：週期常態 (週一～週日) vs 近期每日 (MM/DD) -->
-    <div class="flex items-center justify-between mb-3">
-      <span class="text-xs font-semibold text-gray-500">時段活躍分佈</span>
-      <div class="flex rounded-lg bg-gray-100 p-0.5 border border-gray-200 text-xs">
-        <button type="button" @click="viewMode = 'dates'"
-                class="px-2.5 py-0.5 rounded-md font-medium transition-all"
-                :class="viewMode === 'dates' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-800'">
+    <div class="flex items-center justify-between">
+      <span class="text-xs font-bold text-slate-700">活躍時段分佈熱力</span>
+      <div class="flex rounded-xl bg-slate-100 p-0.5 border border-slate-200/80 text-xs">
+        <button
+          type="button"
+          @click="viewMode = 'dates'"
+          class="px-2.5 py-1 rounded-lg font-bold transition-all btn-press"
+          :class="viewMode === 'dates' ? 'bg-white text-brand-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'"
+        >
           每日熱力
         </button>
-        <button type="button" @click="viewMode = 'weekly'"
-                class="px-2.5 py-0.5 rounded-md font-medium transition-all"
-                :class="viewMode === 'weekly' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-800'">
+        <button
+          type="button"
+          @click="viewMode = 'weekly'"
+          class="px-2.5 py-1 rounded-lg font-bold transition-all btn-press"
+          :class="viewMode === 'weekly' ? 'bg-white text-brand-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'"
+        >
           週期常態
         </button>
       </div>
     </div>
 
     <!-- 每日熱力視圖 (MM/DD HH:00) -->
-    <div v-if="viewMode === 'dates'" class="overflow-x-auto -mx-1 px-1">
+    <div v-if="viewMode === 'dates'" class="overflow-x-auto -mx-1 px-1 no-scrollbar">
       <div class="inline-block min-w-full">
         <!-- Hour axis -->
-        <div class="flex mb-1 pl-12">
-          <span v-for="h in 24" :key="h"
-                class="text-[8px] text-gray-300 text-center tabular-nums"
-                :style="cellStyle">{{ (h - 1) % 6 === 0 ? h - 1 : '' }}</span>
+        <div class="flex mb-1.5 pl-12">
+          <span
+            v-for="h in 24"
+            :key="h"
+            class="text-[9px] text-slate-400 font-mono text-center tabular-nums"
+            :style="cellStyle"
+          >
+            {{ (h - 1) % 6 === 0 ? h - 1 : '' }}
+          </span>
         </div>
         <!-- Rows by recent dates -->
-        <div v-for="row in dateRows" :key="row.date" class="flex items-center mb-0.5">
-          <span class="text-[10px] text-gray-400 w-12 shrink-0 font-medium tabular-nums">{{ row.label }}</span>
-          <span v-for="h in 24" :key="h"
-                class="rounded-sm cursor-pointer"
-                :style="dateCellColor(row.date, h - 1)"
-                :title="`${row.label} ${h - 1}:00 · ${dateCountAt(row.date, h - 1)} 則`" />
+        <div v-for="row in dateRows" :key="row.date" class="flex items-center mb-1">
+          <span class="text-[10px] text-slate-500 w-12 shrink-0 font-bold font-mono tabular-nums">{{ row.label }}</span>
+          <span
+            v-for="h in 24"
+            :key="h"
+            class="rounded-sm cursor-pointer transition-transform hover:scale-125"
+            :style="dateCellColor(row.date, h - 1)"
+            :title="`${row.label} ${h - 1}:00 · ${dateCountAt(row.date, h - 1)} 則`"
+          />
         </div>
       </div>
     </div>
 
     <!-- 週期常態視圖 (週一～週日) -->
-    <div v-else class="overflow-x-auto -mx-1 px-1">
+    <div v-else class="overflow-x-auto -mx-1 px-1 no-scrollbar">
       <div class="inline-block min-w-full">
         <!-- Hour axis -->
-        <div class="flex mb-1 pl-6">
-          <span v-for="h in 24" :key="h"
-                class="text-[8px] text-gray-300 text-center tabular-nums"
-                :style="cellStyle">{{ (h - 1) % 6 === 0 ? h - 1 : '' }}</span>
+        <div class="flex mb-1.5 pl-8">
+          <span
+            v-for="h in 24"
+            :key="h"
+            class="text-[9px] text-slate-400 font-mono text-center tabular-nums"
+            :style="cellStyle"
+          >
+            {{ (h - 1) % 6 === 0 ? h - 1 : '' }}
+          </span>
         </div>
         <!-- Rows by day of week -->
-        <div v-for="row in weeklyRows" :key="row.dow" class="flex items-center mb-0.5">
-          <span class="text-[9px] text-gray-400 w-6 shrink-0">{{ row.label }}</span>
-          <span v-for="h in 24" :key="h"
-                class="rounded-sm cursor-pointer"
-                :style="weeklyCellColor(row.dow, h - 1)"
-                :title="`週${row.label} ${h - 1}:00 · ${weeklyCountAt(row.dow, h - 1)} 則`" />
+        <div v-for="row in weeklyRows" :key="row.dow" class="flex items-center mb-1">
+          <span class="text-[10px] text-slate-500 w-8 shrink-0 font-bold">週{{ row.label }}</span>
+          <span
+            v-for="h in 24"
+            :key="h"
+            class="rounded-sm cursor-pointer transition-transform hover:scale-125"
+            :style="weeklyCellColor(row.dow, h - 1)"
+            :title="`週${row.label} ${h - 1}:00 · ${weeklyCountAt(row.dow, h - 1)} 則`"
+          />
         </div>
       </div>
     </div>
 
-    <div class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 px-1">
+    <div class="mt-4 pt-3 border-t border-slate-100 flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-slate-500">
       <span v-if="peak">
-        巔峰時段：<span class="font-semibold text-gray-700">{{ peak.label }} {{ peak.hour }}:00</span>
-        <span class="opacity-60 tabular-nums">（{{ peak.count }} 則）</span>
+        🔥 巔峰時段：<span class="font-bold text-slate-800">{{ peak.label }} {{ peak.hour }}:00</span>
+        <span class="opacity-75 font-mono">（{{ peak.count }} 則）</span>
       </span>
       <span>
-        夜貓子指數：<span class="text-amber-500">{{ '⭐'.repeat(nightStars) || '—' }}</span>
-        <span class="opacity-60 tabular-nums">{{ nightPct }}% 在 22:00–04:00</span>
+        🌙 夜貓指數：<span class="text-amber-500 font-bold">{{ '⭐'.repeat(nightStars) || '—' }}</span>
+        <span class="opacity-75 font-mono ml-1">{{ nightPct }}% 深夜發言</span>
       </span>
     </div>
   </div>
@@ -83,7 +105,6 @@ const props = defineProps<{
 
 const viewMode = ref<'dates' | 'weekly'>('dates')
 
-// strftime %w：0=週日。以「一二三四五六日」順序顯示。
 const weeklyRows = [
   { dow: 1, label: '一' }, { dow: 2, label: '二' }, { dow: 3, label: '三' },
   { dow: 4, label: '四' }, { dow: 5, label: '五' }, { dow: 6, label: '六' },
@@ -92,10 +113,8 @@ const weeklyRows = [
 
 const cellStyle = { width: '13px', minWidth: '13px', height: '13px' } as const
 
-// --- 每日視圖邏輯 ---
 const dateRows = computed(() => {
   const dates = [...new Set((props.dateData || []).map((d) => d.date))]
-  // 最多取最近 14 天
   return dates.slice(0, 14).map((d) => {
     const parts = d.split('-')
     const label = parts.length >= 3 ? `${parts[1]}/${parts[2]}` : d
@@ -118,7 +137,7 @@ function dateCountAt(date: string, hour: number) {
 
 function dateCellColor(date: string, hour: number) {
   const v = dateCountAt(date, hour)
-  const alpha = v === 0 ? 0 : 0.12 + 0.88 * (v / maxDateCount.value)
+  const alpha = v === 0 ? 0 : 0.15 + 0.85 * (v / maxDateCount.value)
   return {
     ...cellStyle,
     backgroundColor: v === 0 ? '#f1f5f9' : `rgba(99,102,241,${alpha.toFixed(3)})`,
@@ -126,7 +145,6 @@ function dateCellColor(date: string, hour: number) {
   }
 }
 
-// --- 週期常態視圖邏輯 ---
 const weeklyGrid = computed(() => {
   const m = new Map<string, number>()
   for (const c of props.data || []) m.set(`${c.day_of_week}-${c.hour}`, c.count)
@@ -142,7 +160,7 @@ function weeklyCountAt(dow: number, hour: number) {
 
 function weeklyCellColor(dow: number, hour: number) {
   const v = weeklyCountAt(dow, hour)
-  const alpha = v === 0 ? 0 : 0.12 + 0.88 * (v / maxWeeklyCount.value)
+  const alpha = v === 0 ? 0 : 0.15 + 0.85 * (v / maxWeeklyCount.value)
   return {
     ...cellStyle,
     backgroundColor: v === 0 ? '#f1f5f9' : `rgba(99,102,241,${alpha.toFixed(3)})`,

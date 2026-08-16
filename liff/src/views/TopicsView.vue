@@ -1,134 +1,146 @@
 <template>
-  <div>
-    <div class="flex items-center justify-between mb-4">
+  <div class="space-y-6">
+    <div class="flex items-center justify-between">
       <div>
-        <h1 class="text-xl font-bold text-gray-900">話題分析</h1>
-        <p v-if="data?.last_analyzed_at" class="text-[11px] text-gray-400 mt-0.5">
+        <h1 class="text-xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
+          <span>🧠 群組話題與情緒</span>
+        </h1>
+        <p v-if="data?.last_analyzed_at" class="text-[11px] text-slate-400 font-mono mt-0.5">
           最後分析：{{ formatAnalyzedTime(data.last_analyzed_at) }}
         </p>
       </div>
       <!-- 管理員觸發重新分析按鈕 -->
-      <button v-if="auth.role === 'admin'"
-              @click="triggerReanalyze"
-              :disabled="analyzing"
-              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100 disabled:opacity-50 transition-colors">
+      <button
+        v-if="auth.role === 'admin'"
+        @click="triggerReanalyze"
+        :disabled="analyzing"
+        class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-brand-50 text-brand-600 border border-brand-200 hover:bg-brand-100 disabled:opacity-50 transition-all btn-press shadow-xs"
+      >
         <span :class="analyzing ? 'animate-spin' : ''">🔄</span>
         <span>{{ analyzing ? 'LLM 分析中...' : '重新分析' }}</span>
       </button>
     </div>
-    <div v-if="loading">
-      <div class="skeleton h-4 w-28 rounded-full mb-3" />
-      <div class="skeleton rounded-2xl mb-6" style="height:220px" />
-      <div class="skeleton h-4 w-28 rounded-full mb-3" />
-      <div class="skeleton rounded-2xl mb-6" style="height:180px" />
-      <div class="skeleton h-4 w-20 rounded-full mb-3" />
-      <div class="bg-white rounded-2xl border border-gray-100 shadow-sm divide-y">
-        <div v-for="i in 5" :key="i" class="flex items-center px-4 py-3 gap-3">
-          <div class="skeleton flex-1 h-4 rounded-full" />
-          <div class="skeleton w-12 h-4 rounded" />
-        </div>
-      </div>
+
+    <!-- Skeleton -->
+    <div v-if="loading" class="space-y-4">
+      <div class="skeleton h-48 rounded-2xl" />
+      <div class="skeleton h-40 rounded-2xl" />
     </div>
-    <div v-else-if="error" class="flex flex-col items-center py-16 text-center gap-2">
-      <p class="text-3xl">⚠️</p>
-      <p class="text-sm font-medium text-gray-700">無法載入資料</p>
-      <p class="text-xs text-gray-400">{{ error }}</p>
-    </div>
-    <div v-else-if="data">
+
+    <EmptyState
+      v-else-if="error"
+      icon="⚠️"
+      title="無法載入話題資料"
+      :description="error"
+    />
+
+    <div v-else-if="data" class="space-y-6">
       <!-- 熱門關鍵字文字雲 -->
       <template v-if="data.top_keywords && data.top_keywords.length">
-        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">熱門關鍵字</h2>
-        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-2 mb-6">
-          <WordCloud :words="cloudWords" />
+        <div>
+          <SectionHeader title="熱門話題關鍵字雲" icon="☁️" />
+          <BaseCard class="p-3 card-rise overflow-hidden">
+            <WordCloud :words="cloudWords" />
+          </BaseCard>
         </div>
       </template>
 
       <!-- 熱門話題 -->
-      <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">熱門話題 Top 10</h2>
-      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-6">
-        <Bar :data="topicBarData" :options="barOptions" style="max-height:220px" />
+      <div>
+        <SectionHeader title="熱門話題 Top 10" icon="📊" />
+        <BaseCard class="p-4 card-rise">
+          <Bar :data="topicBarData" :options="barOptions" style="max-height:220px" />
+        </BaseCard>
       </div>
 
       <!-- 情緒分佈 -->
       <template v-if="data.sentiment_distribution && data.sentiment_distribution.length">
-        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">情緒分佈</h2>
-        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-6">
-          <Doughnut :data="sentimentDistData" :options="doughnutOptions" style="max-height:220px" />
+        <div>
+          <SectionHeader title="發言情緒佔比" icon="🎭" />
+          <BaseCard class="p-4 card-rise">
+            <Doughnut :data="sentimentDistData" :options="doughnutOptions" style="max-height:220px" />
+          </BaseCard>
         </div>
       </template>
 
       <!-- 話題情緒 -->
       <template v-if="data.topic_sentiment && data.topic_sentiment.length">
-        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">各話題平均情緒</h2>
-        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 divide-y overflow-hidden mb-6">
-          <div v-for="t in data.topic_sentiment" :key="t.topic" class="flex items-center px-4 py-2.5 gap-3">
-            <span class="w-14 text-sm text-gray-700">{{ t.topic }}</span>
-            <div class="flex-1 h-2 rounded-full bg-gray-100 relative overflow-hidden">
-              <div class="absolute top-0 bottom-0 rounded-full"
-                   :style="sentimentBarStyle(t.avg_sentiment)" />
+        <div>
+          <SectionHeader title="各話題平均情緒指標" icon="🌡️" />
+          <BaseCard class="overflow-hidden card-rise">
+            <div class="divide-y divide-slate-100">
+              <div v-for="t in data.topic_sentiment" :key="t.topic" class="flex items-center px-4 py-3 gap-3">
+                <span class="w-20 text-xs font-bold text-slate-700 truncate"># {{ t.topic }}</span>
+                <div class="flex-1 h-2 rounded-full bg-slate-100 relative overflow-hidden">
+                  <div class="absolute top-0 bottom-0 rounded-full"
+                       :style="sentimentBarStyle(t.avg_sentiment)" />
+                </div>
+                <span class="text-xs font-mono font-bold w-12 text-right tabular-nums"
+                      :class="t.avg_sentiment >= 0 ? 'text-success-600' : 'text-danger-500'">
+                  {{ t.avg_sentiment > 0 ? '+' : '' }}{{ t.avg_sentiment.toFixed(2) }}
+                </span>
+              </div>
             </div>
-            <span class="text-xs tabular-nums w-12 text-right"
-                  :class="t.avg_sentiment >= 0 ? 'text-emerald-600' : 'text-rose-500'">
-              {{ t.avg_sentiment > 0 ? '+' : '' }}{{ t.avg_sentiment.toFixed(2) }}
-            </span>
-          </div>
+          </BaseCard>
         </div>
       </template>
 
       <!-- 情緒曲線 -->
-      <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">群組情緒曲線</h2>
-      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-6">
-        <Line :data="sentimentLineData" :options="lineOptions" style="max-height:180px" />
+      <div>
+        <SectionHeader title="情緒波動趨勢曲線" icon="📈" />
+        <BaseCard class="p-4 card-rise">
+          <Line :data="sentimentLineData" :options="lineOptions" style="max-height:180px" />
+        </BaseCard>
       </div>
 
       <!-- 熱門地點 -->
       <template v-if="data.hot_locations && data.hot_locations.length">
-        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">熱門地點</h2>
-        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-6 flex flex-wrap gap-2">
-          <span v-for="l in data.hot_locations" :key="l.location"
-                class="inline-flex items-center gap-1 rounded-lg bg-amber-50 border border-amber-100 px-2.5 py-1 text-xs text-amber-700">
-            📍 {{ l.location }}
-            <span class="opacity-60 tabular-nums">{{ l.count }}</span>
-          </span>
+        <div>
+          <SectionHeader title="熱門提及地點" icon="📍" />
+          <BaseCard class="p-4 flex flex-wrap gap-2 card-rise">
+            <span
+              v-for="l in data.hot_locations"
+              :key="l.location"
+              class="inline-flex items-center gap-1.5 rounded-xl bg-accent-50 border border-accent-200/80 px-3 py-1.5 text-xs font-bold text-accent-800"
+            >
+              <span>📍 {{ l.location }}</span>
+              <span class="font-mono text-[11px] opacity-75">({{ l.count }})</span>
+            </span>
+          </BaseCard>
         </div>
       </template>
 
-      <!-- 精選語錄：情緒最鮮明的原話 -->
+      <!-- 精選語錄 -->
       <template v-if="data.highlight_quotes && data.highlight_quotes.length">
-        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">精選語錄</h2>
-        <p class="text-xs text-gray-400 mb-2">情緒最鮮明的發言（最正面 / 最負面）</p>
-        <div class="space-y-2 mb-6">
-          <div v-for="(q, i) in data.highlight_quotes" :key="i"
-               class="bg-white rounded-2xl shadow-sm border-l-4 px-4 py-3"
-               :class="q.tone === 'positive' ? 'border-emerald-400' : 'border-rose-400'">
-            <div class="flex items-center gap-1.5 mb-1">
-              <span class="text-xs font-semibold px-1.5 py-0.5 rounded"
-                    :class="q.tone === 'positive' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-500'">
-                {{ q.tone === 'positive' ? '🔥 最正面' : '💢 最負面' }}
-              </span>
-              <span class="text-xs tabular-nums"
-                    :class="q.tone === 'positive' ? 'text-emerald-500' : 'text-rose-400'">
-                {{ q.sentiment > 0 ? '+' : '' }}{{ q.sentiment.toFixed(2) }}
-              </span>
+        <div>
+          <SectionHeader title="情緒精選金句語錄" icon="💬" />
+          <div class="space-y-3">
+            <div
+              v-for="(q, i) in data.highlight_quotes"
+              :key="i"
+              class="bg-white rounded-2xl shadow-card border-l-4 px-4 py-3.5 card-rise transition-all"
+              :class="q.tone === 'positive' ? 'border-success-500' : 'border-danger-500'"
+            >
+              <div class="flex items-center justify-between mb-1.5">
+                <span
+                  class="text-[10px] font-bold px-2 py-0.5 rounded-md"
+                  :class="q.tone === 'positive' ? 'bg-success-50 text-success-700' : 'bg-danger-50 text-danger-700'"
+                >
+                  {{ q.tone === 'positive' ? '🔥 滿滿正能量' : '💢 吐槽代表' }}
+                </span>
+                <span
+                  class="text-xs font-mono font-bold tabular-nums"
+                  :class="q.tone === 'positive' ? 'text-success-600' : 'text-danger-500'"
+                >
+                  {{ q.sentiment > 0 ? '+' : '' }}{{ q.sentiment.toFixed(2) }}
+                </span>
+              </div>
+              <p class="text-sm font-semibold text-slate-800 leading-relaxed">「{{ q.content }}」</p>
+              <p class="text-xs text-slate-400 mt-1 font-medium text-right">— {{ q.user_name }}</p>
             </div>
-            <p class="text-sm text-gray-800 leading-snug">「{{ q.content }}」</p>
-            <p class="text-xs text-gray-400 mt-1">— {{ q.user_name }}</p>
           </div>
         </div>
       </template>
-
-      <!-- 話題列表 -->
-      <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">話題總覽</h2>
-      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 divide-y overflow-hidden">
-        <div v-for="t in data.top_topics" :key="t.topic"
-             class="flex items-center px-4 py-2">
-          <span class="flex-1 text-sm">{{ t.topic }}</span>
-          <span class="text-sm font-semibold tabular-nums text-gray-500">{{ t.count }} 次</span>
-        </div>
-        <div v-if="!data.top_topics.length" class="px-4 py-3 text-sm text-gray-400">
-          尚無已分析話題
-        </div>
-      </div>
     </div>
   </div>
 </template>
@@ -142,17 +154,28 @@ import {
 } from 'chart.js'
 import { api } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
+import { useAnalysisStore } from '@/stores/analysis'
 import { useToast } from '@/composables/useToast'
+import { useRefreshOnAnalysis } from '@/composables/useRefreshOnAnalysis'
 import WordCloud from '@/components/WordCloud.vue'
+import BaseCard from '@/components/BaseCard.vue'
+import EmptyState from '@/components/EmptyState.vue'
+import SectionHeader from '@/components/SectionHeader.vue'
 
 ChartJS.register(CategoryScale, LinearScale, ArcElement, BarElement, PointElement, LineElement, Title, Tooltip, Legend, Filler)
 
 const auth = useAuthStore()
 const toast = useToast()
+const analysis = useAnalysisStore()
 const data = ref<any>(null)
 const loading = ref(true)
 const analyzing = ref(false)
 const error = ref('')
+
+async function loadTopics() {
+  try { data.value = await api.topics() }
+  catch (e: any) { error.value = e?.message || '請求失敗' }
+}
 
 function formatAnalyzedTime(ts: number) {
   if (!ts) return ''
@@ -166,9 +189,8 @@ async function triggerReanalyze() {
   analyzing.value = true
   try {
     const res = await api.adminAnalyzeTopics()
+    analysis.bumped(res.updated)
     toast.success(`LLM 分析完成，更新了 ${res.updated} 則訊息 🎉`)
-    // 重新載入話題資料
-    data.value = await api.topics()
   } catch (e: any) {
     toast.error(e?.message || '分析失敗，請稍後再試')
   } finally {
@@ -181,7 +203,12 @@ const topicBarData = computed(() => {
   const top10 = data.value.top_topics.slice(0, 10)
   return {
     labels: top10.map((t: any) => t.topic),
-    datasets: [{ label: '提及次數', data: top10.map((t: any) => t.count), backgroundColor: '#60a5fa' }],
+    datasets: [{
+      label: '提及次數',
+      data: top10.map((t: any) => t.count),
+      backgroundColor: '#6366f1',
+      borderRadius: 6,
+    }],
   }
 })
 
@@ -189,6 +216,10 @@ const barOptions = {
   responsive: true,
   indexAxis: 'y' as const,
   plugins: { legend: { display: false } },
+  scales: {
+    x: { grid: { color: 'rgba(226,232,240,0.6)' } },
+    y: { grid: { display: false } },
+  },
 }
 
 const sentimentLineData = computed(() => {
@@ -199,10 +230,11 @@ const sentimentLineData = computed(() => {
     datasets: [{
       label: '情緒值',
       data: rows.map((r: any) => r.avg_sentiment),
-      borderColor: '#34d399',
-      backgroundColor: 'rgba(52,211,153,0.1)',
+      borderColor: '#10b981',
+      backgroundColor: 'rgba(16,185,129,0.12)',
       fill: true,
-      tension: 0.4,
+      tension: 0.35,
+      borderWidth: 2.5,
     }],
   }
 })
@@ -210,7 +242,10 @@ const sentimentLineData = computed(() => {
 const lineOptions = {
   responsive: true,
   plugins: { legend: { display: false } },
-  scales: { y: { min: -1, max: 1 } },
+  scales: {
+    y: { min: -1, max: 1, grid: { color: 'rgba(226,232,240,0.6)' } },
+    x: { grid: { display: false } },
+  },
 }
 
 const SENT_COLORS: Record<string, string> = {
@@ -226,13 +261,19 @@ const sentimentDistData = computed(() => {
     datasets: [{
       data: rows.map((r: any) => r.count),
       backgroundColor: rows.map((r: any) => SENT_COLORS[r.category] || '#94a3b8'),
+      borderWidth: 0,
     }],
   }
 })
 
 const doughnutOptions = {
   responsive: true,
-  plugins: { legend: { position: 'bottom' as const, labels: { boxWidth: 12, font: { size: 11 } } } },
+  plugins: {
+    legend: {
+      position: 'bottom' as const,
+      labels: { boxWidth: 12, font: { size: 11, family: 'Inter, Noto Sans TC' }, padding: 12 },
+    },
+  },
 }
 
 const cloudWords = computed(() =>
@@ -240,17 +281,16 @@ const cloudWords = computed(() =>
 )
 
 function sentimentBarStyle(v: number) {
-  // -1..1 映射到中線兩側
   const pct = Math.min(Math.abs(v), 1) * 50
   if (v >= 0) {
-    return { left: '50%', width: `${pct}%`, background: '#34d399' }
+    return { left: '50%', width: `${pct}%`, background: '#10b981' }
   }
-  return { right: '50%', width: `${pct}%`, background: '#f87171' }
+  return { right: '50%', width: `${pct}%`, background: '#f43f5e' }
 }
 
 onMounted(async () => {
-  try { data.value = await api.topics() }
-  catch (e: any) { error.value = e?.message || '請求失敗'; console.error(e) }
-  finally { loading.value = false }
+  await loadTopics()
+  loading.value = false
 })
+useRefreshOnAnalysis(loadTopics)
 </script>

@@ -1,7 +1,13 @@
 <template>
-  <div class="text-center py-16">
-    <p class="text-4xl mb-4">🚫</p>
-    <h1 class="text-xl font-bold text-gray-700">你不是群組成員</h1>
-    <p class="text-gray-500 mt-2">請先加入群組後再使用此功能</p>
+  <div class="py-20">
+    <EmptyState
+      icon="🚫"
+      title="您尚未加入此群組"
+      description="本統計數據專為群組成員提供，請先透過 LINE 加入群組後再開啟此頁面！"
+    />
   </div>
 </template>
+
+<script setup lang="ts">
+import EmptyState from '@/components/EmptyState.vue'
+</script>

@@ -16,7 +16,7 @@ const svgRef = ref<SVGSVGElement | null>(null)
 const w = ref(320)
 const h = ref(240)
 
-const PALETTE = ['#2563eb', '#7c3aed', '#db2777', '#059669', '#d97706', '#0891b2', '#dc2626']
+const PALETTE = ['#6366f1', '#4f46e5', '#818cf8', '#a855f7', '#f59e0b', '#10b981', '#0ea5e9']
 
 async function render() {
   if (!svgRef.value || !containerRef.value || !props.words?.length) return
@@ -31,7 +31,7 @@ async function render() {
   const counts = props.words.map((d) => d.count)
   const min = Math.min(...counts)
   const max = Math.max(...counts)
-  const sizeScale = d3.scaleSqrt().domain([min, max || 1]).range([14, 46])
+  const sizeScale = d3.scaleSqrt().domain([min, max || 1]).range([14, 44])
 
   const layoutWords = props.words.map((d) => ({
     text: d.text,
@@ -42,9 +42,9 @@ async function render() {
   const layout = cloud<any>()
     .size([w.value, h.value])
     .words(layoutWords)
-    .padding(3)
-    .rotate(() => (Math.random() < 0.7 ? 0 : 90))
-    .font('sans-serif')
+    .padding(4)
+    .rotate(() => (Math.random() < 0.75 ? 0 : 90))
+    .font('Inter, Noto Sans TC, sans-serif')
     .fontSize((d: any) => d.size)
     .on('end', draw)
 
@@ -60,8 +60,8 @@ async function render() {
       .data(words)
       .join('text')
       .style('font-size', (d: any) => `${d.size}px`)
-      .style('font-weight', '600')
-      .style('font-family', 'sans-serif')
+      .style('font-weight', '700')
+      .style('font-family', 'Inter, Noto Sans TC, sans-serif')
       .style('fill', (_d: any, i: number) => PALETTE[i % PALETTE.length])
       .attr('text-anchor', 'middle')
       .attr('transform', (d: any) => `translate(${d.x},${d.y}) rotate(${d.rotate})`)

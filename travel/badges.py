@@ -1,4 +1,6 @@
 """Emoji 徽章邏輯（Phase 2）。介面預留給 Phase 2.5 fal.ai 替換。"""
+import json
+import os
 import sqlite3
 import time
 import uuid
@@ -9,18 +11,20 @@ from travel.trip_crud import get_trip, get_participants
 
 ABROAD_KEYWORDS = {"日本", "韓國", "泰國", "美國", "歐洲", "海外", "法國", "德國", "義大利", "越南", "菲律賓", "馬來西亞", "新加坡", "澳洲", "英國"}
 
-THEME_KEYWORDS: list[tuple[str, str]] = [
+# 內建公開主題關鍵字（與地點、活動類型）。
+# 群組專屬的私人綽號 / 暗語請放在 `BADGES_THEME_PATH` 指向的 JSON（gitignored），
+# 格式：{"themes": [["關鍵字", "emoji"], ...]}
+THEME_KEYWORDS_BASE: list[tuple[str, str]] = [
     # 具體活動/主題
     ("火鍋", "🍲"), ("鬆餅", "🥞"), ("美食", "🍜"), ("烤肉", "🍖"), ("吃", "🍽️"),
     ("水槍", "🔫"), ("保齡球", "🎳"), ("拍貼", "📸"), ("動物園", "🦁"), ("牧場", "🐮"), ("牛", "🐮"),
     ("傳單", "📄"), ("醉", "🍺"), ("酒", "🍻"), ("舞會", "💃"), ("變裝", "🎭"),
-    ("魔牆人偶", "🃏"), ("戰警", "🦸"), ("水晶", "💎"), ("綠光", "✨"), ("大騙局", "🃏"),
-    ("仙人跳", "💃"), ("合作社", "🏪"), ("匾額", "📜"), ("修抽屜", "🪚"), ("美術", "🎨"),
+    ("修抽屜", "🪚"), ("美術", "🎨"),
     ("學測", "📝"), ("考", "✏️"), ("暑輔", "📚"), ("翹課", "🏃"), ("返校", "🏫"),
     ("教室", "💻"), ("google", "🌐"), ("地圖", "🗺️"), ("方向燈", "🚗"), ("車", "🚗"),
     ("火燒車", "🔥"), ("極地", "❄️"), ("求生", "⛺"), ("魔法", "🪄"), ("嚇一跳", "👻"),
     ("立牌", "🧍"), ("愛心", "💌"), ("小卡", "💌"), ("足跡", "👣"), ("疫情", "😷"),
-    ("飛機", "✈️"), ("男模", "🕺"), ("教授", "🎓"), ("游媽媽", "👩"),
+    ("飛機", "✈️"), ("男模", "🕺"), ("教授", "🎓"),
     # 地點關鍵字
     ("墾丁", "🏖️"), ("海邊", "🏖️"), ("沙灘", "🏖️"), ("海灘", "🏖️"), ("南灣", "🏖️"), ("澎湖", "🏝️"),
     ("武嶺", "🏔️"), ("山", "🏔️"), ("登山", "🏔️"), ("玉山", "🏔️"), ("合歡", "🏔️"),
@@ -29,6 +33,24 @@ THEME_KEYWORDS: list[tuple[str, str]] = [
     ("日本", "✈️"), ("韓國", "✈️"), ("海外", "✈️"), ("出國", "✈️"),
     ("台南", "🏯"), ("夜市", "🌃"), ("台北", "🌃"), ("城市", "🏙️"),
 ]
+
+
+def _load_group_themes() -> list[tuple[str, str]]:
+    """讀群組專屬主題關鍵字（私人綽號 / 暗語），gitignored 檔案，讀不到就略過。"""
+    path = os.getenv("BADGES_THEME_PATH", "data/badges_theme.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return []
+    out: list[tuple[str, str]] = []
+    for item in data.get("themes", []):
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
+            kw, emoji = str(item[0]), str(item[1])
+            if kw:
+                out.append((kw, emoji))
+    return out
+
 
 def compute_badge_emoji(trip: dict, rarity: str = "") -> str:
     """優先使用自訂 custom_emoji，否則依旅程標題、地點或類型產生主題 emoji。"""
@@ -39,7 +61,10 @@ def compute_badge_emoji(trip: dict, rarity: str = "") -> str:
     types = trip.get("trip_type") or ""
     combined = f"{title} {location} {types}"
 
-    for keyword, emoji in THEME_KEYWORDS:
+    for keyword, emoji in THEME_KEYWORDS_BASE:
+        if keyword in combined:
+            return emoji
+    for keyword, emoji in _load_group_themes():
         if keyword in combined:
             return emoji
     return "🎒"

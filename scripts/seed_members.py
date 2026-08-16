@@ -1,9 +1,13 @@
 #!/usr/bin/env python
-"""Seed 群組成員名單（14 位真人，排除機器人）到 members 表。
+"""Seed 群組成員名單到 members 表。
 
 已在 messages 說過話者直接綁真實 LINE user_id（source=auto, resolved=1）；
 未說話者用合成 id 'manual:<uuid8>'（source=manual, resolved=0），
 日後說話時由 travel.db.reconcile_member() 自動接回真實 id。
+
+成員名單從 `LINE_GROUP_MEMBERS` env 讀，逗號分隔（避免把真人姓名寫進 repo）。
+範例：
+    LINE_GROUP_MEMBERS=Alice,Bob,Carol
 
 用法：
     DB_PATH=data/chat.db python scripts/seed_members.py
@@ -19,12 +23,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from travel.db import get_conn  # noqa: E402
 
-GROUP_ID = "Cba567481e809e13952a49947ad6afea2"
+GROUP_ID = os.getenv("LINE_GROUP_ID", "").strip()
+if not GROUP_ID:
+    sys.exit("錯誤：LINE_GROUP_ID 未設定，請在 .env 填入主群 LINE 群組 ID")
 
-MEMBERS = [
-    "洪偉城", "Boy", "尹玟馨", "李孟倢", "楊哲嘉", "楊子賢", "王弈尹",
-    "范丞皓", "連定煒", "鈞", "陳彥中", "陳諾威", "霈姍", "黃正杰",
-]
+_raw = os.getenv("LINE_GROUP_MEMBERS", "").strip()
+if not _raw:
+    sys.exit(
+        "錯誤：LINE_GROUP_MEMBERS 未設定。請在 .env 用逗號分隔列出 display_name，\n"
+        "例：LINE_GROUP_MEMBERS=Alice,Bob,Carol"
+    )
+MEMBERS = [name.strip() for name in _raw.split(",") if name.strip()]
 
 
 def main() -> None:

@@ -1,0 +1,6 @@
+{
+  "_doc": "範例檔。複製成 data/badges_theme.json 並填入群組專屬的私人綽號/暗語關鍵字（key 為標題/地點中會出現的字詞，value 為對應 emoji）。沒設定不影響基本功能。travel/badges.compute_badge_emoji 會自動載入。",
+  "themes": [
+    ["範例綽號", "🎯"]
+  ]
+}

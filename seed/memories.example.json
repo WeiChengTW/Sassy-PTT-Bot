@@ -1,0 +1,10 @@
+{
+  "_doc": "範例檔。複製成 data/memories.json 並填入實際群組歷史事件後再執行 scripts/import_memories.py。欄位 date 支援 'YYYY/M/D' 或 'YYYY/M/D-D' / 'YYYY/M/D-M/D'；rarity_zh 對照：普通=common、稀有=rare、極稀有=super_rare、史詩=epic、傳說=legendary。",
+  "memories": [
+    {
+      "date": "2021/11/4",
+      "title": "範例：第一次群聚",
+      "rarity_zh": "稀有"
+    }
+  ]
+}

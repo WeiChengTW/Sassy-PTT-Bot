@@ -311,10 +311,12 @@ def get_trip_detail(trip_id: str) -> dict:
         participants_rows = conn.execute(
             """SELECT tp.user_id, tp.role, tp.joined_at, tp.messages_count,
                       COALESCE(
-                        (SELECT user_name FROM messages WHERE user_id=tp.user_id LIMIT 1),
+                        (SELECT user_name FROM messages WHERE user_id=tp.user_id AND group_id=t.group_id LIMIT 1),
                         (SELECT display_name FROM members WHERE user_id=tp.user_id LIMIT 1)
                       ) AS user_name
-               FROM trip_participants tp WHERE tp.trip_id=?""",
+               FROM trip_participants tp
+               JOIN trips t ON t.id = tp.trip_id
+               WHERE tp.trip_id=?""",
             (trip_id,),
         ).fetchall()
         

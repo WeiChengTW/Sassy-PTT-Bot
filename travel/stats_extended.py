@@ -50,7 +50,7 @@ def get_leaderboard_data(group_id: str, period: str = "all") -> dict:
             """SELECT b.user_id,
                       COALESCE(
                         (SELECT display_name FROM members WHERE user_id=b.user_id LIMIT 1),
-                        (SELECT user_name FROM messages WHERE user_id=b.user_id AND user_name IS NOT NULL ORDER BY timestamp DESC LIMIT 1)
+                        (SELECT user_name FROM messages WHERE user_id=b.user_id AND user_name IS NOT NULL AND (group_id=? OR group_id IS NULL) ORDER BY timestamp DESC LIMIT 1)
                       ) AS user_name,
                       COUNT(*) AS badge_count,
                       SUM(CASE WHEN b.badge_rarity='legendary' THEN 1 ELSE 0 END) AS legendary_count,
@@ -69,8 +69,8 @@ def get_leaderboard_data(group_id: str, period: str = "all") -> dict:
                LEFT JOIN trips t ON t.id = b.trip_id
                WHERE b.user_id IS NOT NULL AND (t.group_id=? OR t.group_id IS NULL)
                GROUP BY b.user_id
-               ORDER BY badge_count DESC, legendary_count DESC, epic_count DESC, super_rare_count DESC""",
-            (group_id,),
+               ORDER BY badge_count DESC, legendary_count DESC, epic_count DESC, super_rare_count DESC, rare_count DESC""",
+            (group_id, group_id),
         ).fetchall()
 
     return {

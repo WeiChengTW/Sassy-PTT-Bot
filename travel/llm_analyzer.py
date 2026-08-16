@@ -140,16 +140,17 @@ def run_monthly_analysis():
         for r in results:
             if "id" not in r:
                 continue
+            # 注意：sentiment 不在此寫入。逐則 flash 情緒判讀雜訊過高，情緒改由
+            # travel.sentiment_windows 的視窗式 pro 模型分析負責（見 run_sentiment_backfill）。
             conn.execute(
                 """UPDATE messages
-                   SET is_travel_related=?, topics=?, keywords=?, sentiment=?,
+                   SET is_travel_related=?, topics=?, keywords=?,
                        locations=?, summary=?, analyzed_at=?
                    WHERE id=?""",
                 (
                     r.get("is_travel_related", 0),
                     json.dumps(r.get("topics", []), ensure_ascii=False),
                     json.dumps(r.get("keywords", []), ensure_ascii=False),
-                    r.get("sentiment", 0.0),
                     json.dumps(r.get("locations", []), ensure_ascii=False),
                     r.get("summary", ""),
                     now,

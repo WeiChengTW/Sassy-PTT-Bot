@@ -21,6 +21,12 @@ import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+except ImportError:
+    pass
+
 from travel.db import get_conn  # noqa: E402
 
 GROUP_ID = os.getenv("LINE_GROUP_ID", "").strip()

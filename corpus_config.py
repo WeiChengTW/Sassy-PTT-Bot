@@ -2,6 +2,12 @@
 import os
 from pathlib import Path
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+except ImportError:
+    pass
+
 # 已知的機器人 / 非真人發言者：建群組記憶與匯入時都要略過。
 KNOWN_BOTS = {"卡米狗", "鍵盤俠", "nonsense", "弈塵 8"}
 

@@ -1,57 +1,83 @@
 <template>
-  <div>
-    <h1 class="text-xl font-bold mb-4 text-gray-900">互動關係</h1>
-    <div v-if="loading">
-      <div class="skeleton h-4 w-24 rounded-full mb-3" />
-      <div class="bg-white rounded-2xl border border-gray-100 shadow-sm divide-y mb-6">
-        <div v-for="i in 4" :key="i" class="flex items-center px-4 py-3 gap-3">
-          <div class="skeleton w-4 h-4 rounded" />
-          <div class="skeleton flex-1 h-4 rounded-full" />
-          <div class="skeleton w-10 h-4 rounded" />
-        </div>
-      </div>
-      <div class="skeleton h-4 w-28 rounded-full mb-3" />
-      <div class="skeleton rounded-2xl" style="height:280px" />
+  <div class="space-y-6">
+    <h1 class="text-xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
+      <span>🤝 群組互動關係網絡</span>
+    </h1>
+
+    <div v-if="loading" class="space-y-4">
+      <div class="skeleton h-32 rounded-2xl" />
+      <div class="skeleton h-64 rounded-2xl" />
     </div>
-    <div v-else-if="error" class="flex flex-col items-center py-16 text-center gap-2">
-      <p class="text-3xl">⚠️</p>
-      <p class="text-sm font-medium text-gray-700">無法載入資料</p>
-      <p class="text-xs text-gray-400">{{ error }}</p>
-    </div>
-    <div v-else-if="data">
+
+    <EmptyState
+      v-else-if="error"
+      icon="⚠️"
+      title="無法載入互動資料"
+      :description="error"
+    />
+
+    <div v-else-if="data" class="space-y-6">
       <!-- 最佳拍檔 -->
-      <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">最佳拍檔（依回覆次數）</h2>
-      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 divide-y mb-6">
-        <div v-if="!data.best_pairs.length" class="px-4 py-3 text-sm text-gray-400">
-          尚無回覆互動資料
-        </div>
-        <div v-for="(pair, i) in data.best_pairs" :key="i"
-             class="flex items-center px-4 py-3 gap-2">
-          <span class="text-gray-400 text-sm w-5">{{ i + 1 }}</span>
-          <span class="flex-1 text-sm font-medium">
-            {{ pair.user1_name || pair.user1_id }}
-            <span class="text-gray-400 mx-1">↔</span>
-            {{ pair.user2_name || pair.user2_id }}
-          </span>
-          <span class="text-sm font-semibold tabular-nums text-gray-600">{{ pair.count }} 次</span>
-        </div>
+      <div>
+        <SectionHeader title="群組最佳拍檔" icon="🏆" subtitle="依雙向回覆次數" />
+        <BaseCard class="overflow-hidden card-rise">
+          <div v-if="!data.best_pairs.length" class="px-4 py-8 text-sm text-slate-400 text-center">
+            尚無回覆互動資料
+          </div>
+          <div v-else class="divide-y divide-slate-100">
+            <div
+              v-for="(pair, i) in data.best_pairs"
+              :key="i"
+              class="flex items-center px-4 py-3.5 gap-2 transition-colors hover:bg-slate-50/80"
+              :class="i === 0 ? 'bg-accent-50/40' : ''"
+            >
+              <span
+                class="text-xs w-6 text-center font-bold tabular-nums"
+                :class="i === 0 ? 'text-accent-600' : 'text-slate-400'"
+              >
+                {{ i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i + 1 }}
+              </span>
+              <span class="flex-1 text-xs font-bold text-slate-800 truncate">
+                {{ pair.user1_name || pair.user1_id }}
+                <span class="text-slate-300 mx-1 font-normal">↔</span>
+                {{ pair.user2_name || pair.user2_id }}
+              </span>
+              <span class="text-xs font-bold font-mono tabular-nums text-brand-600 bg-brand-50 px-2 py-0.5 rounded-full">
+                {{ pair.count }} 次回覆
+              </span>
+            </div>
+          </div>
+        </BaseCard>
       </div>
 
       <!-- 社交網絡圖 -->
-      <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">互動網絡</h2>
-      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-2 mb-6">
-        <svg ref="svgRef" :width="svgW" :height="svgH" class="w-full" />
-        <p v-if="!data.network_edges.length" class="text-center text-sm text-gray-400 py-4">
-          尚無互動資料
-        </p>
+      <div>
+        <SectionHeader title="社交引力網絡圖" icon="🕸️" />
+        <BaseCard class="p-4 card-rise flex flex-col items-center min-h-[300px] justify-center">
+          <svg
+            v-show="data.network_edges && data.network_edges.length"
+            ref="svgRef"
+            :width="svgW"
+            :height="svgH"
+            class="w-full max-w-[340px]"
+          />
+          <p v-if="!data.network_edges || !data.network_edges.length" class="text-center text-xs text-slate-400 py-6">
+            互動數據尚不足以繪製網絡圖
+          </p>
+        </BaseCard>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import * as d3 from 'd3'
 import { api } from '@/api/client'
+import { useRefreshOnAnalysis } from '@/composables/useRefreshOnAnalysis'
+import BaseCard from '@/components/BaseCard.vue'
+import EmptyState from '@/components/EmptyState.vue'
+import SectionHeader from '@/components/SectionHeader.vue'
 
 const data = ref<any>(null)
 const loading = ref(true)
@@ -61,13 +87,11 @@ const simRef = ref<any>(null)
 const svgW = 340
 const svgH = 280
 
-async function drawGraph() {
-  if (!svgRef.value || !data.value?.network_edges.length) return
-  // Dynamic import D3 so it's code-split
-  const d3 = await import('d3')
+function drawGraph() {
+  if (!svgRef.value || !data.value?.network_edges?.length) return
 
-  const nodes: any[] = data.value.network_nodes.map((n: any) => ({ ...n }))
-  const links: any[] = data.value.network_edges.map((e: any) => ({
+  const nodes: any[] = (data.value.network_nodes || []).map((n: any) => ({ ...n }))
+  const links: any[] = (data.value.network_edges || []).map((e: any) => ({
     source: e.source, target: e.target, weight: e.weight,
   }))
 
@@ -75,15 +99,15 @@ async function drawGraph() {
   svg.selectAll('*').remove()
 
   const maxMsg = Math.max(...nodes.map((n: any) => n.message_count), 1)
-  const rScale = d3.scaleSqrt().domain([0, maxMsg]).range([6, 20])
+  const rScale = d3.scaleSqrt().domain([0, maxMsg]).range([10, 24])
   const maxW = Math.max(...links.map((l: any) => l.weight), 1)
-  const strokeScale = d3.scaleLinear().domain([0, maxW]).range([1, 5])
+  const strokeScale = d3.scaleLinear().domain([0, maxW]).range([1.5, 6])
 
   const sim = d3.forceSimulation(nodes)
     .force('link', d3.forceLink(links).id((d: any) => d.id).distance(80))
     .force('charge', d3.forceManyBody().strength(-120))
     .force('center', d3.forceCenter(svgW / 2, svgH / 2))
-    .force('collision', d3.forceCollide().radius((d: any) => rScale(d.message_count) + 4))
+    .force('collision', d3.forceCollide().radius((d: any) => rScale(d.message_count) + 5))
   simRef.value = sim
 
   const link = svg.append('g')
@@ -91,6 +115,7 @@ async function drawGraph() {
     .data(links)
     .join('line')
     .attr('stroke', '#cbd5e1')
+    .attr('stroke-opacity', 0.7)
     .attr('stroke-width', (d: any) => strokeScale(d.weight))
 
   const node = svg.append('g')
@@ -110,16 +135,19 @@ async function drawGraph() {
 
   node.append('circle')
     .attr('r', (d: any) => rScale(d.message_count))
-    .attr('fill', '#60a5fa')
-    .attr('stroke', '#fff')
-    .attr('stroke-width', 2)
+    .attr('fill', '#6366f1')
+    .attr('stroke', '#ffffff')
+    .attr('stroke-width', 2.5)
+    .attr('class', 'shadow-md cursor-grab active:cursor-grabbing')
 
   node.append('text')
     .text((d: any) => (d.name || d.id).slice(0, 4))
     .attr('text-anchor', 'middle')
     .attr('dy', '0.35em')
-    .attr('font-size', 9)
-    .attr('fill', '#fff')
+    .attr('font-size', 10)
+    .attr('font-family', 'Inter, Noto Sans TC, sans-serif')
+    .attr('font-weight', '700')
+    .attr('fill', '#ffffff')
     .attr('pointer-events', 'none')
 
   sim.on('tick', () => {
@@ -136,13 +164,29 @@ onUnmounted(() => {
   if (simRef.value) simRef.value.stop()
 })
 
-onMounted(async () => {
-  try { data.value = await api.interactions() }
-  catch (e: any) { error.value = e?.message || '請求失敗'; console.error(e) }
-  finally {
+async function loadInteractions() {
+  try {
+    loading.value = true
+    data.value = await api.interactions()
+  } catch (e: any) {
+    error.value = e?.message || '請求失敗'
+    console.error(e)
+  } finally {
     loading.value = false
     await nextTick()
-    drawGraph()
+    setTimeout(() => {
+      drawGraph()
+    }, 50)
   }
+}
+
+onMounted(async () => {
+  await loadInteractions()
 })
+
+watch(() => data.value, () => {
+  nextTick(() => drawGraph())
+})
+
+useRefreshOnAnalysis(loadInteractions)
 </script>

@@ -1,211 +1,225 @@
 <template>
-  <div>
-    <h1 class="text-xl font-bold mb-4 text-gray-900">排行榜</h1>
+  <div class="space-y-6">
+    <div class="flex items-center justify-between">
+      <h1 class="text-xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
+        <span>🏆 榮譽排行榜</span>
+      </h1>
+    </div>
 
     <!-- Skeleton -->
-    <div v-if="loading">
-      <div class="skeleton h-4 w-24 rounded-full mb-3" />
-      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 divide-y mb-6">
-        <div v-for="i in 5" :key="i" class="flex items-center px-4 py-3 gap-3">
+    <div v-if="loading" class="space-y-6">
+      <div class="skeleton h-4 w-32 rounded-full" />
+      <div class="bg-white rounded-2xl p-4 border border-slate-100 divide-y divide-slate-100">
+        <div v-for="i in 5" :key="i" class="flex items-center py-3 gap-3">
           <div class="skeleton w-6 h-4 rounded" />
           <div class="skeleton flex-1 h-4 rounded-full" />
           <div class="skeleton w-12 h-4 rounded" />
         </div>
       </div>
-      <div class="skeleton h-4 w-36 rounded-full mb-3" />
-      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 divide-y">
-        <div v-for="i in 3" :key="i" class="flex items-center px-4 py-3 gap-3">
-          <div class="skeleton w-5 h-4 rounded" />
-          <div class="skeleton flex-1 h-4 rounded-full" />
-          <div class="skeleton w-12 h-4 rounded" />
-        </div>
-      </div>
     </div>
 
-    <div v-else-if="error" class="flex flex-col items-center py-16 text-center gap-2">
-      <p class="text-3xl">⚠️</p>
-      <p class="text-sm font-medium text-gray-700">無法載入資料</p>
-      <p class="text-xs text-gray-400">{{ error }}</p>
-    </div>
-    <div v-else-if="data">
+    <EmptyState
+      v-else-if="error"
+      icon="⚠️"
+      title="無法載入資料"
+      :description="error"
+    />
+
+    <div v-else-if="data" class="space-y-6">
       <!-- 徽章成就排行 -->
-      <div class="flex items-center justify-between mb-2">
-        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide">🏅 徽章成就排行</h2>
-        <!-- 切換按鈕: 加權積分 vs 總枚數 -->
-        <div class="flex rounded-lg bg-gray-100 p-0.5 border border-gray-200">
-          <button type="button" @click="badgeSortMode = 'weighted'"
-                  class="px-2.5 py-0.5 text-xs rounded-md font-medium transition-all"
-                  :class="badgeSortMode === 'weighted' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-800'">
-            加權積分
-          </button>
-          <button type="button" @click="badgeSortMode = 'count'"
-                  class="px-2.5 py-0.5 text-xs rounded-md font-medium transition-all"
-                  :class="badgeSortMode === 'count' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-800'">
-            總枚數
-          </button>
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <SectionHeader title="徽章成就榜" icon="🏅" class="!mt-0 !mb-0" />
+          <SegmentedControl
+            v-model="badgeSortMode"
+            :options="[
+              { label: '加權積分', value: 'weighted' },
+              { label: '總枚數', value: 'count' }
+            ]"
+          />
         </div>
-      </div>
-      <p class="text-[11px] text-gray-400 mb-2" v-if="badgeSortMode === 'weighted'">
-        計分規則：傳說 2.0 · 史詩 1.5 · 極稀有 1.0 · 稀有 0.8 · 普通 0.5 (楊教授提供)
-      </p>
-      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 divide-y mb-6 overflow-hidden">
-        <div v-for="(u, i) in sortedBadgeRankings" :key="u.user_id"
-             class="flex items-center px-4 py-3 gap-3"
-             :class="i === 0 ? 'bg-amber-50/60' : i === 1 ? 'bg-slate-50/60' : ''">
-          <!-- Medal / Rank -->
-          <span class="text-base w-7 text-center flex-shrink-0 font-bold tabular-nums"
-                :class="i === 0 ? 'text-amber-500' : i === 1 ? 'text-slate-400' : i === 2 ? 'text-amber-700' : 'text-gray-300 text-sm font-normal'">
-            {{ i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i + 1 }}
-          </span>
-          <div class="flex-1 min-w-0">
-            <p class="text-sm font-bold truncate" :class="i === 0 ? 'text-amber-950' : 'text-gray-800'">
-              {{ u.user_name || u.user_id }}
-            </p>
-            <!-- 稀有度分佈 pills -->
-            <div class="flex items-center gap-1.5 mt-1 text-[10px] flex-wrap">
-              <span v-if="u.legendary_count" class="px-1.5 py-0.2 rounded bg-rose-50 text-rose-600 font-semibold border border-rose-100">
-                傳說 {{ u.legendary_count }}
+        <p class="text-[11px] text-slate-400 mb-3" v-if="badgeSortMode === 'weighted'">
+          計分規則：傳說 2.0 · 史詩 1.5 · 極稀有 1.0 · 稀有 0.8 · 普通 0.5
+        </p>
+        
+        <BaseCard class="overflow-hidden card-rise">
+          <div class="divide-y divide-slate-100">
+            <div
+              v-for="(u, i) in sortedBadgeRankings"
+              :key="u.user_id"
+              class="flex items-center px-4 py-3.5 gap-3 transition-colors hover:bg-slate-50/80"
+              :class="i === 0 ? 'bg-accent-50/40' : i === 1 ? 'bg-slate-50/60' : ''"
+            >
+              <!-- Medal / Rank -->
+              <span
+                class="text-sm w-6 text-center font-bold tabular-nums shrink-0"
+                :class="i === 0 ? 'text-accent-600' : i === 1 ? 'text-slate-400' : i === 2 ? 'text-amber-700' : 'text-slate-300 font-normal'"
+              >
+                {{ i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i + 1 }}
               </span>
-              <span v-if="u.epic_count" class="px-1.5 py-0.2 rounded bg-purple-50 text-purple-600 font-semibold border border-purple-100">
-                史詩 {{ u.epic_count }}
-              </span>
-              <span v-if="u.super_rare_count" class="px-1.5 py-0.2 rounded bg-amber-50 text-amber-700 font-semibold border border-amber-100">
-                極稀有 {{ u.super_rare_count }}
-              </span>
-              <span v-if="u.rare_count" class="px-1.5 py-0.2 rounded bg-blue-50 text-blue-600 font-medium border border-blue-100">
-                稀有 {{ u.rare_count }}
-              </span>
-              <span v-if="u.common_count" class="px-1.5 py-0.2 rounded bg-gray-50 text-gray-600 font-medium border border-gray-100">
-                普通 {{ u.common_count }}
-              </span>
+              <div class="flex-1 min-w-0">
+                <p class="text-sm font-bold truncate" :class="i === 0 ? 'text-amber-950' : 'text-slate-800'">
+                  {{ u.user_name || u.user_id }}
+                </p>
+                <!-- 稀有度分佈 pills -->
+                <div class="flex items-center gap-1.5 mt-1 text-[10px] flex-wrap">
+                  <span v-if="u.legendary_count" class="px-1.5 py-0.2 rounded bg-rose-50 text-rose-600 font-bold border border-rose-100">
+                    傳說 {{ u.legendary_count }}
+                  </span>
+                  <span v-if="u.epic_count" class="px-1.5 py-0.2 rounded bg-purple-50 text-purple-600 font-bold border border-purple-100">
+                    史詩 {{ u.epic_count }}
+                  </span>
+                  <span v-if="u.super_rare_count" class="px-1.5 py-0.2 rounded bg-amber-50 text-amber-700 font-bold border border-amber-100">
+                    極稀有 {{ u.super_rare_count }}
+                  </span>
+                  <span v-if="u.rare_count" class="px-1.5 py-0.2 rounded bg-sky-50 text-sky-700 font-medium border border-sky-100">
+                    稀有 {{ u.rare_count }}
+                  </span>
+                  <span v-if="u.common_count" class="px-1.5 py-0.2 rounded bg-slate-50 text-slate-600 font-medium border border-slate-200">
+                    普通 {{ u.common_count }}
+                  </span>
+                </div>
+              </div>
+              <div class="text-right shrink-0">
+                <template v-if="badgeSortMode === 'weighted'">
+                  <span
+                    class="text-base font-black font-mono tabular-nums"
+                    :class="i === 0 ? 'text-accent-600' : 'text-brand-600'"
+                  >
+                    {{ u.score }}
+                  </span>
+                  <span class="text-[10px] font-medium text-slate-400 block -mt-1">分 ({{ u.badge_count }}枚)</span>
+                </template>
+                <template v-else>
+                  <span
+                    class="text-base font-black font-mono tabular-nums"
+                    :class="i === 0 ? 'text-accent-600' : 'text-slate-800'"
+                  >
+                    {{ u.badge_count }}
+                  </span>
+                  <span class="text-xs font-normal text-slate-400 block -mt-1">枚徽章</span>
+                </template>
+              </div>
+            </div>
+            <div v-if="!sortedBadgeRankings.length" class="px-4 py-8 text-sm text-slate-400 text-center">
+              尚無徽章數據
             </div>
           </div>
-          <div class="text-right shrink-0">
-            <template v-if="badgeSortMode === 'weighted'">
-              <span class="text-base font-black tabular-nums"
-                    :class="i === 0 ? 'text-amber-600' : 'text-blue-600'">
-                {{ u.score }}
-              </span>
-              <span class="text-[10px] font-normal text-gray-400 block -mt-1">分 ({{ u.badge_count }}枚)</span>
-            </template>
-            <template v-else>
-              <span class="text-base font-black tabular-nums"
-                    :class="i === 0 ? 'text-amber-600' : 'text-gray-800'">
-                {{ u.badge_count }}
-              </span>
-              <span class="text-xs font-normal text-gray-400 block -mt-1">枚徽章</span>
-            </template>
-          </div>
-        </div>
-        <div v-if="!sortedBadgeRankings.length" class="px-4 py-4 text-sm text-gray-400 text-center">
-          尚無徽章數據
-        </div>
+        </BaseCard>
       </div>
 
-      <!-- 活躍度排行 -->
-      <div class="flex items-center justify-between mb-2">
-        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide">💬 發言活躍排行</h2>
-        <!-- 切換按鈕: 全部 vs 文字 vs 貼圖 vs 圖片 -->
-        <div class="flex rounded-lg bg-gray-100 p-0.5 border border-gray-200 text-xs">
-          <button type="button" @click="activeMessageFilter = 'all'"
-                  class="px-2 py-0.5 rounded-md font-medium transition-all"
-                  :class="activeMessageFilter === 'all' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-800'">
-            全部
-          </button>
-          <button type="button" @click="activeMessageFilter = 'text'"
-                  class="px-2 py-0.5 rounded-md font-medium transition-all"
-                  :class="activeMessageFilter === 'text' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-800'">
-            文字
-          </button>
-          <button type="button" @click="activeMessageFilter = 'sticker'"
-                  class="px-2 py-0.5 rounded-md font-medium transition-all"
-                  :class="activeMessageFilter === 'sticker' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-800'">
-            貼圖
-          </button>
-          <button type="button" @click="activeMessageFilter = 'image'"
-                  class="px-2 py-0.5 rounded-md font-medium transition-all"
-                  :class="activeMessageFilter === 'image' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-800'">
-            圖片
-          </button>
+      <!-- 發言活躍排行 -->
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <SectionHeader title="發言活躍排行" icon="💬" class="!mt-0 !mb-0" />
+          <SegmentedControl
+            v-model="activeMessageFilter"
+            :options="[
+              { label: '全部', value: 'all' },
+              { label: '文字', value: 'text' },
+              { label: '貼圖', value: 'sticker' },
+              { label: '圖片', value: 'image' }
+            ]"
+          />
         </div>
-      </div>
-      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 divide-y mb-6 overflow-hidden">
-        <div v-for="(u, i) in sortedMessageRankings" :key="u.user_id"
-             class="flex items-center px-4 py-3 gap-3"
-             :class="i === 0 ? 'bg-amber-50/60' : i === 1 ? 'bg-slate-50/60' : ''">
-          <!-- Medal / Rank -->
-          <span class="text-base w-7 text-center flex-shrink-0 font-bold tabular-nums"
-                :class="i === 0 ? 'text-amber-500' : i === 1 ? 'text-slate-400' : i === 2 ? 'text-amber-700' : 'text-gray-300 text-sm font-normal'">
-            {{ i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i + 1 }}
-          </span>
-          <div class="flex-1 min-w-0">
-            <p class="text-sm font-bold truncate" :class="i === 0 ? 'text-amber-950' : 'text-gray-800'">
-              {{ u.user_name || u.user_id }}
-            </p>
-            <!-- 訊息類型分佈 pills -->
-            <div class="flex items-center gap-1.5 mt-1 text-[10px] flex-wrap">
-              <span v-if="u.text_count" class="px-1.5 py-0.2 rounded bg-blue-50 text-blue-600 font-medium border border-blue-100">
-                💬 文字 {{ u.text_count }}
+
+        <BaseCard class="overflow-hidden card-rise">
+          <div class="divide-y divide-slate-100">
+            <div
+              v-for="(u, i) in sortedMessageRankings"
+              :key="u.user_id"
+              class="flex items-center px-4 py-3.5 gap-3 transition-colors hover:bg-slate-50/80"
+              :class="i === 0 ? 'bg-accent-50/40' : i === 1 ? 'bg-slate-50/60' : ''"
+            >
+              <!-- Medal / Rank -->
+              <span
+                class="text-sm w-6 text-center font-bold tabular-nums shrink-0"
+                :class="i === 0 ? 'text-accent-600' : i === 1 ? 'text-slate-400' : i === 2 ? 'text-amber-700' : 'text-slate-300 font-normal'"
+              >
+                {{ i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i + 1 }}
               </span>
-              <span v-if="u.sticker_count" class="px-1.5 py-0.2 rounded bg-pink-50 text-pink-600 font-medium border border-pink-100">
-                🎭 貼圖 {{ u.sticker_count }}
-              </span>
-              <span v-if="u.image_count" class="px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-600 font-medium border border-emerald-100">
-                📸 圖片 {{ u.image_count }}
-              </span>
-              <span v-if="u.video_count" class="px-1.5 py-0.2 rounded bg-orange-50 text-orange-600 font-medium border border-orange-100">
-                🎬 影片 {{ u.video_count }}
-              </span>
+              <div class="flex-1 min-w-0">
+                <p class="text-sm font-bold truncate" :class="i === 0 ? 'text-amber-950' : 'text-slate-800'">
+                  {{ u.user_name || u.user_id }}
+                </p>
+                <!-- 訊息類型分佈 pills -->
+                <div class="flex items-center gap-1.5 mt-1 text-[10px] flex-wrap">
+                  <span v-if="u.text_count" class="px-1.5 py-0.2 rounded bg-blue-50 text-blue-600 font-medium border border-blue-100">
+                    💬 {{ u.text_count }}
+                  </span>
+                  <span v-if="u.sticker_count" class="px-1.5 py-0.2 rounded bg-pink-50 text-pink-600 font-medium border border-pink-100">
+                    🎭 {{ u.sticker_count }}
+                  </span>
+                  <span v-if="u.image_count" class="px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-600 font-medium border border-emerald-100">
+                    📸 {{ u.image_count }}
+                  </span>
+                  <span v-if="u.video_count" class="px-1.5 py-0.2 rounded bg-orange-50 text-orange-600 font-medium border border-orange-100">
+                    🎬 {{ u.video_count }}
+                  </span>
+                </div>
+              </div>
+              <div class="text-right shrink-0">
+                <span
+                  class="text-base font-black font-mono tabular-nums"
+                  :class="i === 0 ? 'text-accent-600' : 'text-slate-800'"
+                >
+                  {{ (displayCountOf(u)).toLocaleString() }}
+                </span>
+                <span class="text-xs font-normal text-slate-400 block -mt-1">則{{ filterUnitText }}</span>
+              </div>
+            </div>
+            <div v-if="!sortedMessageRankings.length" class="px-4 py-8 text-sm text-slate-400 text-center">
+              尚無發言數據
             </div>
           </div>
-          <div class="text-right shrink-0">
-            <span class="text-base font-black tabular-nums"
-                  :class="i === 0 ? 'text-amber-600' : 'text-gray-800'">
-              {{ (displayCountOf(u)).toLocaleString() }}
-            </span>
-            <span class="text-xs font-normal text-gray-400 block -mt-1">則{{ filterUnitText }}</span>
-          </div>
-        </div>
-        <div v-if="!sortedMessageRankings.length" class="px-4 py-4 text-sm text-gray-400 text-center">
-          尚無發言數據
-        </div>
+        </BaseCard>
       </div>
 
       <!-- 訊息類型圓餅圖 -->
-      <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">訊息類型分佈</h2>
-      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-6">
-        <Pie :data="pieChartData" :options="pieOptions" style="max-height:200px" />
+      <div>
+        <SectionHeader title="訊息型態佔比" icon="🥧" />
+        <BaseCard class="p-4 card-rise">
+          <Pie :data="pieChartData" :options="pieOptions" style="max-height:200px" />
+        </BaseCard>
       </div>
 
       <!-- 夜貓子排行 -->
-      <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-2">🦉 夜貓子排行
-        <span class="text-gray-400 font-normal normal-case">0–4 點</span>
-      </h2>
-      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 divide-y overflow-hidden">
-        <div v-for="(u, i) in data.night_owls" :key="u.user_id"
-             class="flex items-center px-4 py-3 gap-3">
-          <span class="text-gray-300 text-sm w-5 tabular-nums font-medium">{{ i + 1 }}</span>
-          <span class="flex-1 text-sm text-gray-800 truncate">{{ u.user_name || u.user_id }}</span>
-          <span class="text-sm font-semibold tabular-nums text-indigo-600">
-            {{ u.night_count }}
-            <span class="text-xs font-normal text-gray-400">則</span>
-          </span>
-        </div>
-        <div v-if="!data.night_owls.length" class="px-4 py-4 text-sm text-gray-400 text-center">
-          無夜貓子資料
-        </div>
+      <div>
+        <SectionHeader title="夜貓子排行榜" icon="🦉" subtitle="0–4 點深夜發言" />
+        <BaseCard class="overflow-hidden card-rise">
+          <div class="divide-y divide-slate-100">
+            <div
+              v-for="(u, i) in data.night_owls"
+              :key="u.user_id"
+              class="flex items-center px-4 py-3.5 gap-3"
+            >
+              <span class="text-slate-300 text-sm w-5 tabular-nums font-medium">{{ i + 1 }}</span>
+              <span class="flex-1 text-sm font-semibold text-slate-800 truncate">{{ u.user_name || u.user_id }}</span>
+              <span class="text-sm font-bold font-mono tabular-nums text-purple-600">
+                {{ u.night_count }}
+                <span class="text-xs font-normal text-slate-400">則</span>
+              </span>
+            </div>
+            <div v-if="!data.night_owls.length" class="px-4 py-8 text-sm text-slate-400 text-center">
+              深夜無人發言，大家作息都很健康 🌙
+            </div>
+          </div>
+        </BaseCard>
       </div>
 
       <!-- 更多排行榜（資料驅動） -->
-      <div v-if="boards.length" class="mt-8">
-        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-3">🎯 更多排行榜</h2>
-        <!-- 排行榜選單：emoji chip 自動換行（全部一次可見） -->
+      <div v-if="boards.length">
+        <SectionHeader title="更多自訂排行榜" icon="🎯" />
         <div class="flex flex-wrap gap-2 mb-4">
-          <button v-for="b in boards" :key="b.id" @click="selectedId = b.id"
-                  class="px-3 py-1.5 rounded-full text-sm border transition-colors whitespace-nowrap"
-                  :class="selectedId === b.id
-                    ? 'bg-indigo-600 text-white border-indigo-600'
-                    : 'bg-white text-gray-600 border-gray-200'">
+          <button
+            v-for="b in boards"
+            :key="b.id"
+            @click="selectedId = b.id"
+            class="px-3.5 py-1.5 rounded-full text-xs font-bold border transition-all duration-150 btn-press whitespace-nowrap select-none"
+            :class="selectedId === b.id
+              ? 'bg-brand-600 text-white border-brand-600 shadow-sm ring-2 ring-brand-200'
+              : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'"
+          >
             {{ b.emoji }} {{ b.title }}
           </button>
         </div>
@@ -220,7 +234,12 @@ import { ref, computed, onMounted } from 'vue'
 import { Pie } from 'vue-chartjs'
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js'
 import { api, type Board } from '@/api/client'
+import { useRefreshOnAnalysis } from '@/composables/useRefreshOnAnalysis'
 import BoardCard from '@/components/BoardCard.vue'
+import BaseCard from '@/components/BaseCard.vue'
+import EmptyState from '@/components/EmptyState.vue'
+import SectionHeader from '@/components/SectionHeader.vue'
+import SegmentedControl from '@/components/SegmentedControl.vue'
 
 ChartJS.register(ArcElement, Tooltip, Legend)
 
@@ -289,17 +308,30 @@ const pieChartData = computed(() => {
 
 const pieOptions = {
   responsive: true,
-  plugins: { legend: { position: 'bottom' as const, labels: { font: { size: 12 } } } },
+  plugins: {
+    legend: {
+      position: 'bottom' as const,
+      labels: {
+        font: { size: 12, family: 'Inter, Noto Sans TC' },
+        padding: 12,
+      },
+    },
+  },
 }
 
-onMounted(async () => {
+async function loadLeaderboards() {
   try {
     const [lead, more] = await Promise.all([api.leaderboard(), api.leaderboards()])
     data.value = lead
     boards.value = more.boards || []
-    if (boards.value.length) selectedId.value = boards.value[0].id
+    if (boards.value.length && !selectedId.value) selectedId.value = boards.value[0].id
   }
   catch (e: any) { error.value = e?.message || '請求失敗'; console.error(e) }
-  finally { loading.value = false }
+}
+
+onMounted(async () => {
+  await loadLeaderboards()
+  loading.value = false
 })
+useRefreshOnAnalysis(loadLeaderboards)
 </script>

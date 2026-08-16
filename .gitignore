@@ -16,6 +16,8 @@ ptt_vector_db/
 # 語料（大型資料）
 *.jsonl
 data/
+# LINE 群組匯出聊天記錄（私人資料，體積大）
+[[]LINE[]]*.txt
 
 # 日誌
 bot.log

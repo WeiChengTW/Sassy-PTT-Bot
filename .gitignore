@@ -1,6 +1,10 @@
 # 環境與金鑰
 .env
 *.env
+# .env 備份 / 變體（避免 `.env.env.bak.*` 這類檔名再次 commit 進去）
+*.env.*
+!*.env.example
+!liff/.env.liff.example
 
 # Python
 __pycache__/
@@ -26,6 +30,7 @@ nohup.out
 # 其他
 *.json
 !liff/*.json
+!seed/*.json
 Taiba/
 Taiba
 .DS_Store

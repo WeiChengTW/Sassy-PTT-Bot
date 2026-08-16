@@ -166,11 +166,16 @@ Sassy-PTT-Bot/
 │   ├── stats.py                # Dashboard / Trip / User badge 查詢
 │   ├── stats_extended.py       # Phase 3 分析查詢
 │   └── migrations.py
+├── corpus_config.py            # 語料與群組記憶設定、別名與重大事件載入
 ├── indexer.py                  # PTT 語料 → ChromaDB 索引
+├── index_group_memory.py       # 群組歷史對話視窗 → ChromaDB 索引 (group_memory)
 ├── scripts/
+│   ├── import_line_export.py   # LINE 匯出文字紀錄匯入資料庫
 │   └── show_stats.py           # CLI 統計工具
 ├── data/                       # 自動產生（git ignored）
 │   ├── chat.db                 # SQLite
+│   ├── aliases.json            # 群組成員別名/外號對照表（可選）
+│   ├── events.json             # 群組歷史重大事件百科（可選）
 │   ├── news_cache.json         # 每日新聞快取
 │   └── graduation_state.json   # 倒數推送狀態
 ├── PTT-Crawler-master/         # PTT 爬蟲（submodule）

@@ -76,7 +76,7 @@ from corpus_config import (
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_WEBHOOK_PORT = int(os.getenv("LINE_WEBHOOK_PORT", "5000"))
-LINE_GROUP_ID = os.getenv("LINE_GROUP_ID", "")
+MAIN_LINE_GROUP_ID = os.getenv("MAIN_LINE_GROUP_ID", "")
 _grad_date_str = os.getenv("GRADUATION_DATE", "2027-05-30")
 GRADUATION_DATE = date.fromisoformat(_grad_date_str)
 
@@ -254,7 +254,7 @@ class SassyBrain:
             logger.info("LINE Bot 未啟用（缺少 LINE_CHANNEL_SECRET 或 LINE_CHANNEL_ACCESS_TOKEN）")
 
         # 每日倒數畢業排程
-        if LINE_GROUP_ID:
+        if MAIN_LINE_GROUP_ID:
             self._graduation_state_path = (
                 Path(__file__).resolve().parents[1] / "data" / "graduation_state.json"
             )
@@ -367,9 +367,9 @@ class SassyBrain:
                 # 需自動化時，把 _push_stats_reports 掛回 cron job 即可（週一 08:00 / 每月 1 號）。
 
             self._scheduler.start()
-            logger.info(f"[GRADUATION] 排程已啟動，目標群組: {LINE_GROUP_ID}，畢業日: {GRADUATION_DATE}")
+            logger.info(f"[GRADUATION] 排程已啟動，目標群組: {MAIN_LINE_GROUP_ID}，畢業日: {GRADUATION_DATE}")
         else:
-            logger.warning("[GRADUATION] LINE_GROUP_ID 未設定，倒數排程不啟動")
+            logger.warning("[GRADUATION] MAIN_LINE_GROUP_ID 未設定，倒數排程不啟動")
 
     # ── LINE handlers ──────────────────────────────────────────────────────
 
@@ -888,7 +888,7 @@ class SassyBrain:
             rag_context = f"其他相關 PTT 語料（風格參考）：\n{bullets}\n\n"
 
         # 群組記憶：只在主群回覆時套用；其他群組／私訊維持原本純 PTT 流程
-        is_main_group = bool(LINE_GROUP_ID) and chat_id == LINE_GROUP_ID
+        is_main_group = bool(MAIN_LINE_GROUP_ID) and chat_id == MAIN_LINE_GROUP_ID
         group_memory = ""
         group_persona = ""
         if is_main_group:
@@ -1080,7 +1080,7 @@ class SassyBrain:
             try:
                 self.line_api.push_message(
                     PushMessageRequest(
-                        to=LINE_GROUP_ID,
+                        to=MAIN_LINE_GROUP_ID,
                         messages=[LineTextMessage(text=message_text)],
                     ),
                     _request_timeout=10.0,
@@ -1142,7 +1142,7 @@ class SassyBrain:
             return [r["group_id"] for r in rows]
         except Exception as e:
             logger.warning(f"[STATS_PUSH] 取得推播群組失敗: {e}")
-            return [LINE_GROUP_ID] if LINE_GROUP_ID else []
+            return [MAIN_LINE_GROUP_ID] if MAIN_LINE_GROUP_ID else []
 
     def _push_stats_reports(self, period: str, period_label: str):
         """方案 D：定時推播群組戰報 Carousel 到綁定 / 活躍群組。"""
@@ -1208,8 +1208,8 @@ class SassyBrain:
 
     def send_daily_graduation_message(self):
         """每天 09:00 推送鄉民風倒數畢業訊息到 LINE 群組。"""
-        if not self.line_api or not LINE_GROUP_ID:
-            logger.warning("[GRADUATION] LINE API 未初始化或 LINE_GROUP_ID 未設定，跳過推送")
+        if not self.line_api or not MAIN_LINE_GROUP_ID:
+            logger.warning("[GRADUATION] LINE API 未初始化或 MAIN_LINE_GROUP_ID 未設定，跳過推送")
             return
 
         today_iso = date.today().isoformat()

@@ -16,13 +16,13 @@ KNOWN_BOTS = {"卡米狗", "鍵盤俠", "nonsense", "弈塵 8"}
 EMBEDDING_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
 CHROMA_DB_PATH = str(Path(__file__).resolve().parent / "PTT-Crawler-master" / "chroma_db")
 
-# 主群組 ID：群組記憶只屬於這個群。從 LINE_GROUP_ID env 讀，沒設定會在
+# 主群組 ID：群組記憶只屬於這個群。從 MAIN_LINE_GROUP_ID env 讀，沒設定會在
 # import 時直接 raise，避免不小心打到別的群 / 把陌生訊息寫進向量庫。
 def _resolve_main_group_id() -> str:
-    gid = os.getenv("LINE_GROUP_ID", "").strip()
+    gid = os.getenv("MAIN_LINE_GROUP_ID", "").strip()
     if not gid:
         raise RuntimeError(
-            "LINE_GROUP_ID 未設定。請在 .env 填入主群 LINE 群組 ID（從 LINE Developers "
+            "MAIN_LINE_GROUP_ID 未設定。請在 .env 填入主群 LINE 群組 ID（從 LINE Developers "
             "Console 或 bot log 的 webhook event 取）。"
         )
     return gid

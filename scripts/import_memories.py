@@ -34,9 +34,9 @@ except ImportError:
 
 from travel.db import get_conn  # noqa: E402
 
-GROUP_ID = os.getenv("LINE_GROUP_ID", "").strip()
+GROUP_ID = os.getenv("MAIN_LINE_GROUP_ID", "").strip()
 if not GROUP_ID:
-    sys.exit("錯誤：LINE_GROUP_ID 未設定，請在 .env 填入主群 LINE 群組 ID")
+    sys.exit("錯誤：MAIN_LINE_GROUP_ID 未設定，請在 .env 填入主群 LINE 群組 ID")
 
 MEMORIES_PATH = os.getenv("MEMORIES_PATH", "data/memories.json")
 

@@ -29,7 +29,7 @@ const variantClasses = computed(() => {
     case 'brand':
       return 'bg-gradient-to-br from-brand-50 to-white border border-brand-100 shadow-card'
     case 'subtle':
-      return 'bg-surface-subtle border border-slate-200/70 shadow-none'
+      return 'bg-slate-50 border border-slate-200/70 shadow-none'
     case 'elevated':
       return 'bg-white border border-slate-100 shadow-lift'
     case 'surface':

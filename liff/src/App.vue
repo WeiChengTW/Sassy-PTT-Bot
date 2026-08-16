@@ -1,5 +1,5 @@
 <template>
-  <div class="min-h-screen bg-surface-subtle pb-24 text-slate-800">
+  <div class="min-h-screen bg-slate-50 pb-24 text-slate-800">
     <!-- Admin group switcher -->
     <div v-if="auth.role === 'admin'" class="sticky top-0 z-30 bg-accent-50/90 backdrop-blur-md border-b border-accent-200/80 px-4 py-2 flex items-center gap-2">
       <span class="text-xs font-semibold text-accent-700 shrink-0">🔧 切換群組</span>

@@ -1,15 +1,18 @@
 <template>
-  <div class="sticky top-0 z-20 bg-white/90 backdrop-blur-sm border-b border-gray-100 px-4 py-2 flex items-center gap-2">
-    <span class="text-xs font-medium text-gray-400 shrink-0">📅 期間</span>
+  <div class="sticky top-0 z-20 bg-white/80 backdrop-blur-md border-b border-slate-200/70 px-4 py-2 flex items-center gap-2.5 shadow-xs">
+    <span class="text-xs font-semibold text-slate-500 shrink-0 flex items-center gap-1">
+      <span>📅</span>
+      <span>期間</span>
+    </span>
     <select
       v-model="period" @change="onChange"
-      class="flex-1 text-xs bg-gray-50 border border-gray-200 rounded-lg px-2 py-1.5 text-gray-700 focus:outline-none focus:border-blue-300"
+      class="flex-1 text-xs bg-slate-50/80 border border-slate-200 rounded-xl px-2.5 py-1.5 text-slate-700 font-medium focus:outline-none focus:ring-2 focus:ring-brand-400 focus:bg-white transition-all cursor-pointer"
     >
-      <option value="all">全部</option>
-      <optgroup v-if="years.length" label="年">
+      <option value="all">✨ 全部時間</option>
+      <optgroup v-if="years.length" label="歷年">
         <option v-for="y in years" :key="y" :value="y">{{ y }} 年</option>
       </optgroup>
-      <optgroup v-if="months.length" label="月">
+      <optgroup v-if="months.length" label="月份">
         <option v-for="m in months" :key="m" :value="m">{{ formatMonth(m) }}</option>
       </optgroup>
     </select>

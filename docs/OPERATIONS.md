@@ -76,7 +76,7 @@ curl -s http://127.0.0.1:4040/api/tunnels | python3 -c "import sys,json;[print(t
 
 | 排程 | 時間 | 內容 |
 |---|---|---|
-| 畢業倒數 | 每日 **09:00**（watchdog 09:05） | 推播畢業倒數訊息到 `MAIN_LINE_GROUP_ID` |
+| 畢業倒數 | 每日 **09:00**（watchdog 09:05） | 推播畢業倒數訊息到 `LINE_GROUP_ID`（次要群組） |
 | 每月 LLM 分析 | 每月 1 號 03:00 | `run_monthly_analysis` |
 | 每日聚合 | 每日 04:00 | `run_daily_aggregation` |
 | 徽章發放 | 每小時 :05 | `process_ended_trips` |
@@ -92,7 +92,7 @@ curl -s http://127.0.0.1:4040/api/tunnels | python3 -c "import sys,json;[print(t
 
 | 檔案 | 內容 |
 |---|---|
-| `.env` | LINE 金鑰、`MAIN_LINE_GROUP_ID`、`GRADUATION_DATE`、`ADMIN_USER_IDS`、`LIFF_ID`、LLM proxy 等 |
+| `.env` | LINE 金鑰、`MAIN_LINE_GROUP_ID`（主群）、`LINE_GROUP_ID`（次要群組）、`GRADUATION_DATE`、`ADMIN_USER_IDS`、`LIFF_ID`、LLM proxy 等 |
 | `liff/.env.local` | `VITE_LIFF_ID`（前端 LIFF 初始化用） |
 | `ngrok.yml` | ngrok tunnel 設定（`sassy_liff`→5174、`nlp_final_project`→5000） |
 | `data/chat.db` | SQLite 主資料庫（WAL 模式） |

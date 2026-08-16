@@ -77,8 +77,8 @@ LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_WEBHOOK_PORT = int(os.getenv("LINE_WEBHOOK_PORT", "5000"))
 MAIN_LINE_GROUP_ID = os.getenv("MAIN_LINE_GROUP_ID", "")
-# 推播目標群（graduation 倒數 / 群組戰報等主動 push）— 與訊息記憶群
-# (MAIN_LINE_GROUP_ID) 不一定一致：例如歷史匯入到 A 群，但 bot 在 B 群服務。
+# 次要 LINE 群組（只接收 graduation 倒數訊息 + 一般統計戰報，本身沒有
+# 訊息記憶 / 旅行紀錄功能）— 與主群 MAIN_LINE_GROUP_ID 是兩個不同的群。
 LINE_GROUP_ID = os.getenv("LINE_GROUP_ID", "")
 _grad_date_str = os.getenv("GRADUATION_DATE", "2027-05-30")
 GRADUATION_DATE = date.fromisoformat(_grad_date_str)

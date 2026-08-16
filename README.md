@@ -241,7 +241,11 @@ cd liff && npm install && cd ..
 LINE_CHANNEL_SECRET=your_line_channel_secret
 LINE_CHANNEL_ACCESS_TOKEN=your_line_channel_access_token
 LINE_WEBHOOK_PORT=5000
+
+# 主群：所有功能（訊息記憶 / 旅行紀錄 / 統計 / LIFF）都在這個群
 MAIN_LINE_GROUP_ID=your_main_line_group_id
+# 次要群組：只接收 graduation 倒數 + 一般統計戰報，本身無訊息記憶
+LINE_GROUP_ID=your_secondary_line_group_id
 
 # LLM — Primary（推薦，CLIProxyAPI 本機 proxy）
 CLI_PROXY_BASE_URL=http://localhost:8317/v1

@@ -1,7 +1,7 @@
 """視窗式情緒分析（治本版）。
 
 逐則對短訊息打情緒分數雜訊過高，且台灣語助詞/反諷需要上下文。改以「對話視窗」
-（預設 10 分鐘內、最多 8 則）帶上下文，用 pro 階模型判整段情緒，寫回該視窗每則
+（預設 10 分鐘內、最多 4 則；越小越不稀釋單則情緒）帶上下文，用 pro 階模型判整段情緒，寫回該視窗每則
 訊息的 sentiment 欄位。純事務/無情緒的視窗留 NULL（不塞 0，避免稀釋平均）。
 
 - run_sentiment_backfill(group_id=None, only_null=True, ...)：排程與腳本共用入口。
@@ -16,27 +16,28 @@ import time
 from openai import AsyncOpenAI
 
 from travel.db import get_conn
-from corpus_config import (
-    GROUP_WINDOW_GAP_SEC, GROUP_WINDOW_MAX_MSGS, GROUP_MIN_WINDOW_CHARS,
-)
+from corpus_config import GROUP_WINDOW_GAP_SEC, GROUP_MIN_WINDOW_CHARS
 
 BASE = os.getenv("CLI_PROXY_BASE_URL", "http://localhost:8317/v1")
 KEY = os.getenv("CLI_PROXY_API_KEY", "")
 MODEL = os.getenv("SENTIMENT_MODEL", "gemini-3.1-pro-low")
 WINDOWS_PER_CALL = 12
+# 情緒專用的較小視窗（不動 corpus_config 的群組記憶視窗）：視窗越小越不稀釋單則情緒。
+WINDOW_MAX_MSGS = int(os.getenv("SENTIMENT_WINDOW_MAX", "4"))
 
-PROMPT = """你是台灣年輕人 LINE 群組的情緒分析員。以下是多段連續對話（同一時段的視窗）。
-判斷「每一段」整體的情緒，逐段輸出 JSON。
+PROMPT = """你是台灣年輕人 LINE 群組的情緒分析員。以下是多段簡短對話（同一時段的視窗）。
+逐段判斷情緒，輸出 JSON。
 
 欄位：
 - id（視窗 id，必須保留）
-- sentiment（-1~1 浮點；-1 極負面、0 中性、1 極正面。若整段只是中性/事務性/貼圖閒聊/無明顯情緒，給 null）
+- sentiment（-1~1 浮點）。**只要出現明顯情緒就給分**：興奮/開心/稱讚/期待/爽快→正；
+  生氣/抱怨/失望/吵架/無奈→負。玩鬧、吐槽、驚嘆、崩潰也算情緒。
+  僅當整段是純事務性（約時間地點、轉帳分帳、貼連結、單純貼圖）且完全無情緒時，才給 null。
 - label（"positive"/"negative"/"neutral"）
 
-台灣語感重點：
-- 「幹」「靠」「屌」「誇張」常是語助詞或驚嘆，不必然負面，看語境。
-- 要判讀反諷與玩笑的真實情緒（表面罵、實則鬧著玩 → 正面/中性）。
-- 罵人、抱怨、吵架、失望才算負面；玩鬧、興奮、稱讚、期待算正面。
+台灣語感：
+- 「幹」「靠」「屌」「爽」「哈哈」「誇張」常帶情緒（興奮/驚嘆/爽快/傻眼），多為正面，看語境。
+- 反諷與玩笑判真實情緒（表面罵、實則鬧著玩 → 正面/中性）。
 
 只輸出合法 JSON 陣列，不要 ```json 包裹。
 
@@ -83,7 +84,7 @@ def build_windows(group_id: str, only_null: bool) -> list[dict]:
 
     for m in rows:
         gap = (m["timestamp"] - last_ts) / 1000 if last_ts is not None else 0
-        if cur and (gap > GROUP_WINDOW_GAP_SEC or len(cur) >= GROUP_WINDOW_MAX_MSGS):
+        if cur and (gap > GROUP_WINDOW_GAP_SEC or len(cur) >= WINDOW_MAX_MSGS):
             flush()
             cur = []
         cur.append(m)

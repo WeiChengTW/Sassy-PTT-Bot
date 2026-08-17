@@ -429,12 +429,12 @@ def periods():
     from travel.db import get_conn
     with get_conn() as conn:
         year_rows = conn.execute(
-            """SELECT DISTINCT strftime('%Y', timestamp/1000,'unixepoch') AS y
+            """SELECT DISTINCT strftime('%Y', timestamp/1000,'unixepoch','localtime') AS y
                FROM messages WHERE group_id=? ORDER BY y DESC""",
             (group_id,),
         ).fetchall()
         month_rows = conn.execute(
-            """SELECT DISTINCT strftime('%Y-%m', timestamp/1000,'unixepoch') AS m
+            """SELECT DISTINCT strftime('%Y-%m', timestamp/1000,'unixepoch','localtime') AS m
                FROM messages WHERE group_id=? ORDER BY m DESC""",
             (group_id,),
         ).fetchall()

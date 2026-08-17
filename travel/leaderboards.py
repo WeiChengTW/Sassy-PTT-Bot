@@ -5,12 +5,12 @@
 回傳統一結構，供 LIFF 前端與 LINE Flex 卡片共用。
 
 新增排行榜只需在 BOARDS 加一筆 + 寫一個 compute 函式。
-所有時間運算採 epoch 毫秒（date(timestamp/1000,'unixepoch')）；姓名解析用
+所有時間運算採 epoch 毫秒（date(timestamp/1000,'unixepoch','localtime')）；姓名解析用
 stats_extended._resolve_name（優先 members.display_name，退回 messages.user_name）。
 """
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Callable
 
 from travel.db import get_conn
@@ -83,14 +83,14 @@ def _cp_sentiment(conn, group_id, period):
 def _cp_streak(conn, group_id, period):
     pf, pp = period_filter(period)
     rows = conn.execute(
-        f"""SELECT user_id, date(timestamp/1000,'unixepoch') AS d
+        f"""SELECT user_id, date(timestamp/1000,'unixepoch','localtime') AS d
            FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'
            GROUP BY user_id, d ORDER BY user_id, d""", (group_id, *pp)).fetchall()
     per_user: dict[str, list[str]] = {}
     for r in rows:
         if r["d"]:
             per_user.setdefault(r["user_id"], []).append(r["d"])
-    today = datetime.now(timezone.utc).date().isoformat()
+    today = datetime.now().astimezone().date().isoformat()
     scored = []
     for uid, dates in per_user.items():
         streak = _longest_date_streak(sorted(dates))
@@ -191,7 +191,7 @@ def _cp_morning(conn, group_id, period):
     rows = conn.execute(
         f"""SELECT user_id, COUNT(*) AS c FROM messages
            WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'
-             AND CAST(strftime('%H', timestamp/1000, 'unixepoch') AS INTEGER) BETWEEN 5 AND 9
+             AND CAST(strftime('%H', timestamp/1000, 'unixepoch', 'localtime') AS INTEGER) BETWEEN 5 AND 9
            GROUP BY user_id ORDER BY c DESC LIMIT 10""", (group_id, *pp)).fetchall()
     out = [_row(conn, r["user_id"], r["c"], f"{r['c']} 則") for r in rows]
     return {"rows": out, "highlight": None}
@@ -335,7 +335,7 @@ def _month_top(conn, group_id, ym):
 
 
 def _cp_seasonal(conn, group_id, period):
-    now = datetime.now(timezone.utc)
+    now = datetime.now().astimezone()
     this_ym = f"{now.year}-{now.month:02d}"
     prev = (now.year - 1, 12) if now.month == 1 else (now.year, now.month - 1)
     prev_ym = f"{prev[0]}-{prev[1]:02d}"
@@ -355,7 +355,7 @@ def _cp_seasonal(conn, group_id, period):
 def _cp_achievements(conn, group_id, period):
     pf, pp = period_filter(period)
     day_rows = conn.execute(
-        f"""SELECT user_id, date(timestamp/1000,'unixepoch') AS d, COUNT(*) AS c
+        f"""SELECT user_id, date(timestamp/1000,'unixepoch','localtime') AS d, COUNT(*) AS c
            FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'
            GROUP BY user_id, d""", (group_id, *pp)).fetchall()
     best: dict[str, tuple[int, str]] = {}
@@ -367,7 +367,7 @@ def _cp_achievements(conn, group_id, period):
 
     # highlight：最長連擊紀錄
     streak_rows = conn.execute(
-        f"""SELECT user_id, date(timestamp/1000,'unixepoch') AS d
+        f"""SELECT user_id, date(timestamp/1000,'unixepoch','localtime') AS d
            FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'
            GROUP BY user_id, d ORDER BY user_id, d""", (group_id, *pp)).fetchall()
     per_user: dict[str, list[str]] = {}

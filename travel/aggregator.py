@@ -20,7 +20,8 @@ def aggregate_daily(date_str: str | None = None) -> int:
                       SUM(CASE WHEN type='video' THEN 1 ELSE 0 END) AS video_count,
                       SUM(CASE WHEN is_travel_related=1 THEN 1 ELSE 0 END) AS travel_mentions
                FROM messages
-               WHERE date(timestamp/1000, 'unixepoch') = ?
+               WHERE date(timestamp/1000, 'unixepoch', 'localtime') = ?
+                 AND user_id NOT LIKE 'imported:%'
                GROUP BY user_id, group_id""",
             (date_str,),
         ).fetchall()
@@ -51,6 +52,7 @@ def aggregate_lifetime() -> int:
                       (SELECT COUNT(DISTINCT trip_id) FROM trip_participants tp
                        WHERE tp.user_id = m.user_id) AS total_trips
                FROM messages m
+               WHERE m.user_id NOT LIKE 'imported:%'
                GROUP BY m.user_id, m.group_id"""
         ).fetchall()
         for r in rows:
@@ -95,7 +97,8 @@ def aggregate_daily_stats(date_str: str | None = None) -> int:
                       SUM(CASE WHEN is_travel_related=1 THEN 1 ELSE 0 END) AS travel_mentions,
                       COUNT(DISTINCT user_id) AS active_users
                FROM messages
-               WHERE date(timestamp/1000, 'unixepoch') = ?
+               WHERE date(timestamp/1000, 'unixepoch', 'localtime') = ?
+                 AND user_id NOT LIKE 'imported:%'
                GROUP BY group_id""",
             (date_str,),
         ).fetchall()

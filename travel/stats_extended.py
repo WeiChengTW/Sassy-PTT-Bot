@@ -82,7 +82,7 @@ def get_leaderboard_data(group_id: str, period: str = "all") -> dict:
                       SUM(CASE WHEN type='sticker' THEN 1 ELSE 0 END) AS sticker_count,
                       SUM(CASE WHEN type='image'   THEN 1 ELSE 0 END) AS image_count,
                       SUM(CASE WHEN type='video'   THEN 1 ELSE 0 END) AS video_count
-               FROM messages WHERE group_id=?{pf}
+               FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'
                GROUP BY user_id ORDER BY total DESC LIMIT 20""",
             (group_id, *pp),
         ).fetchall()
@@ -90,15 +90,15 @@ def get_leaderboard_data(group_id: str, period: str = "all") -> dict:
         night_owls = conn.execute(
             f"""SELECT user_id, user_name, COUNT(*) AS night_count
                FROM messages
-               WHERE group_id=?{pf}
-                 AND CAST(strftime('%H', timestamp/1000, 'unixepoch') AS INTEGER) BETWEEN 0 AND 4
+               WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'
+                 AND CAST(strftime('%H', timestamp/1000, 'unixepoch', 'localtime') AS INTEGER) BETWEEN 0 AND 4
                GROUP BY user_id ORDER BY night_count DESC LIMIT 10""",
             (group_id, *pp),
         ).fetchall()
 
         type_dist = conn.execute(
             f"""SELECT type, COUNT(*) AS count FROM messages
-               WHERE group_id=?{pf} GROUP BY type ORDER BY count DESC""",
+               WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%' GROUP BY type ORDER BY count DESC""",
             (group_id, *pp),
         ).fetchall()
 
@@ -202,7 +202,7 @@ def get_topics_data(group_id: str, period: str = "all") -> dict:
         ).fetchall()
 
         sentiment_rows = conn.execute(
-            f"""SELECT date(timestamp/1000,'unixepoch') AS date,
+            f"""SELECT date(timestamp/1000,'unixepoch','localtime') AS date,
                       AVG(sentiment) AS avg_sentiment
                FROM messages
                WHERE group_id=?{pf} AND sentiment IS NOT NULL
@@ -211,7 +211,7 @@ def get_topics_data(group_id: str, period: str = "all") -> dict:
         ).fetchall()
 
         weekly_rows = conn.execute(
-            f"""SELECT strftime('%Y-W%W', timestamp/1000,'unixepoch') AS week, topics
+            f"""SELECT strftime('%Y-W%W', timestamp/1000,'unixepoch','localtime') AS week, topics
                FROM messages
                WHERE group_id=?{pf} AND topics IS NOT NULL AND topics != '[]'
                ORDER BY week""",
@@ -247,6 +247,7 @@ def get_topics_data(group_id: str, period: str = "all") -> dict:
                WHERE group_id=?{pf} AND type='text'
                  AND content IS NOT NULL AND length(content) > 1
                  AND sentiment IS NOT NULL
+                 AND user_id NOT LIKE 'imported:%'
                ORDER BY ABS(sentiment) DESC, timestamp DESC LIMIT 200""",
             (group_id, *pp),
         ).fetchall()
@@ -414,7 +415,7 @@ def get_profile_data(user_id: str, group_id: str, period: str = "all") -> dict:
     with get_conn() as conn:
         summary_row = conn.execute(
             f"""SELECT COUNT(*) AS total,
-                      COUNT(DISTINCT date(timestamp/1000,'unixepoch')) AS active_days,
+                      COUNT(DISTINCT date(timestamp/1000,'unixepoch','localtime')) AS active_days,
                       MIN(timestamp) AS first_seen,
                       MAX(timestamp) AS last_seen
                FROM messages WHERE user_id=? AND group_id=?{pf}""",
@@ -428,7 +429,7 @@ def get_profile_data(user_id: str, group_id: str, period: str = "all") -> dict:
         ).fetchall()
 
         hourly_rows = conn.execute(
-            f"""SELECT CAST(strftime('%H', timestamp/1000,'unixepoch') AS INTEGER) AS hour,
+            f"""SELECT CAST(strftime('%H', timestamp/1000,'unixepoch','localtime') AS INTEGER) AS hour,
                       COUNT(*) AS count
                FROM messages WHERE user_id=? AND group_id=?{pf}
                GROUP BY hour ORDER BY hour""",
@@ -531,7 +532,7 @@ def get_user_milestones(user_id: str, group_id: str, period: str = "all") -> dic
                 nth = {"n": threshold, "timestamp": row["timestamp"]}
 
         busiest = conn.execute(
-            f"""SELECT date(timestamp/1000,'unixepoch') AS date, COUNT(*) AS count
+            f"""SELECT date(timestamp/1000,'unixepoch','localtime') AS date, COUNT(*) AS count
                FROM messages WHERE user_id=? AND group_id=?{pf}
                GROUP BY date ORDER BY count DESC, date DESC LIMIT 1""",
             (user_id, group_id, *pp),
@@ -539,7 +540,7 @@ def get_user_milestones(user_id: str, group_id: str, period: str = "all") -> dic
         busiest_day = dict(busiest) if busiest else None
 
         date_rows = conn.execute(
-            f"""SELECT DISTINCT date(timestamp/1000,'unixepoch') AS date
+            f"""SELECT DISTINCT date(timestamp/1000,'unixepoch','localtime') AS date
                FROM messages WHERE user_id=? AND group_id=?{pf}
                ORDER BY date""",
             (user_id, group_id, *pp),
@@ -581,13 +582,13 @@ def get_user_daily_series(user_id: str, group_id: str, period: str = "all") -> d
     pf, pp = period_filter(period)
     with get_conn() as conn:
         count_rows = conn.execute(
-            f"""SELECT date(timestamp/1000,'unixepoch') AS date, COUNT(*) AS count
+            f"""SELECT date(timestamp/1000,'unixepoch','localtime') AS date, COUNT(*) AS count
                FROM messages WHERE user_id=? AND group_id=?{pf}
                GROUP BY date ORDER BY date ASC""",
             (user_id, group_id, *pp),
         ).fetchall()
         sentiment_rows = conn.execute(
-            f"""SELECT date(timestamp/1000,'unixepoch') AS date,
+            f"""SELECT date(timestamp/1000,'unixepoch','localtime') AS date,
                       AVG(sentiment) AS avg_sentiment
                FROM messages WHERE user_id=? AND group_id=?{pf}
                  AND sentiment IS NOT NULL
@@ -731,7 +732,7 @@ def get_pulse_data(group_id: str, period: str = "all") -> dict:
 
         # ── 訊息爆發：每小時 bucket，count > 2×平均 的 top 5 ──
         hourly_rows = conn.execute(
-            f"""SELECT strftime('%Y-%m-%d %H', timestamp/1000,'unixepoch') AS hour,
+            f"""SELECT strftime('%Y-%m-%d %H', timestamp/1000,'unixepoch','localtime') AS hour,
                       COUNT(*) AS count
                FROM messages WHERE group_id=? AND user_id NOT LIKE 'imported:%'{mpf}
                GROUP BY hour""",
@@ -752,12 +753,12 @@ def get_pulse_data(group_id: str, period: str = "all") -> dict:
             key=lambda x: -x["count"],
         )[:5]
 
-        # ── 潛水員：members 名冊 LEFT JOIN 最後發言時間（用現在計算）──
+        # ── 潛水員：members 名冊 LEFT JOIN 最後發言時間（用現在計算，排除 imported）──
         now_ms = int(_time.time() * 1000)
         lurker_rows = conn.execute(
             """SELECT m.user_id AS user_id, m.display_name AS display_name,
                       (SELECT MAX(timestamp) FROM messages
-                       WHERE user_id=m.user_id AND group_id=m.group_id) AS last_seen
+                       WHERE user_id=m.user_id AND group_id=m.group_id AND user_id NOT LIKE 'imported:%') AS last_seen
                FROM members m WHERE m.group_id=?""",
             (group_id,),
         ).fetchall()

@@ -6,7 +6,9 @@ period 格式：
 - "2026-08" → 該月整月
 - "7d" / "30d" → 從現在往回推 N 天的滾動視窗（週報／月報用）
 """
-from datetime import datetime, timezone
+from datetime import datetime
+
+LOCAL_TZ = datetime.now().astimezone().tzinfo
 
 
 def parse_period(period: str) -> tuple[int | None, int | None]:
@@ -16,20 +18,20 @@ def parse_period(period: str) -> tuple[int | None, int | None]:
     # 滾動視窗："7d" / "30d"：從此刻往回推 N 天（end 為現在）。
     if period.endswith("d") and period[:-1].isdigit():
         days = int(period[:-1])
-        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        now_ms = int(datetime.now().astimezone().timestamp() * 1000)
         return (now_ms - days * 86_400_000, now_ms)
     try:
         parts = period.split("-")
         year = int(parts[0])
         if len(parts) == 1:
-            start = datetime(year, 1, 1, tzinfo=timezone.utc)
-            end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+            start = datetime(year, 1, 1, tzinfo=LOCAL_TZ)
+            end = datetime(year + 1, 1, 1, tzinfo=LOCAL_TZ)
         else:
             month = int(parts[1])
-            start = datetime(year, month, 1, tzinfo=timezone.utc)
-            end = (datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+            start = datetime(year, month, 1, tzinfo=LOCAL_TZ)
+            end = (datetime(year + 1, 1, 1, tzinfo=LOCAL_TZ)
                    if month == 12 else
-                   datetime(year, month + 1, 1, tzinfo=timezone.utc))
+                   datetime(year, month + 1, 1, tzinfo=LOCAL_TZ))
     except (ValueError, IndexError):
         return (None, None)
     return (int(start.timestamp() * 1000), int(end.timestamp() * 1000))

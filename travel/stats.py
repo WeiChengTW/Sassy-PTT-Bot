@@ -25,14 +25,14 @@ def get_dashboard_data(group_id: str, days: int = 30, period: str = "all") -> di
             "SELECT COUNT(*) FROM trips WHERE group_id=? AND status='planning'", (group_id,)
         ).fetchone()[0]
         active_days = conn.execute(
-            f"""SELECT COUNT(DISTINCT date(timestamp/1000, 'unixepoch'))
+            f"""SELECT COUNT(DISTINCT date(timestamp/1000, 'unixepoch', 'localtime'))
                FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'""",
             (group_id, *pp),
         ).fetchone()[0]
 
         top_users = conn.execute(
             f"""SELECT user_id, user_name, COUNT(*) AS total,
-                      COUNT(DISTINCT date(timestamp/1000,'unixepoch')) AS active_days
+                      COUNT(DISTINCT date(timestamp/1000,'unixepoch','localtime')) AS active_days
                FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'
                GROUP BY user_id ORDER BY total DESC LIMIT 10""",
             (group_id, *pp),
@@ -47,22 +47,22 @@ def get_dashboard_data(group_id: str, days: int = 30, period: str = "all") -> di
         # daily_counts：period 已選時用區間，否則用 days 視窗
         if pf:
             daily_counts = conn.execute(
-                f"""SELECT date(timestamp/1000,'unixepoch') AS date, COUNT(*) AS count
+                f"""SELECT date(timestamp/1000,'unixepoch','localtime') AS date, COUNT(*) AS count
                    FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'
                    GROUP BY date ORDER BY date ASC""",
                 (group_id, *pp),
             ).fetchall()
         else:
             daily_counts = conn.execute(
-                """SELECT date(timestamp/1000,'unixepoch') AS date, COUNT(*) AS count
+                """SELECT date(timestamp/1000,'unixepoch','localtime') AS date, COUNT(*) AS count
                    FROM messages WHERE group_id=? AND timestamp >= ? AND user_id NOT LIKE 'imported:%'
                    GROUP BY date ORDER BY date ASC""",
                 (group_id, since_ms),
             ).fetchall()
 
         heatmap = conn.execute(
-            f"""SELECT CAST(strftime('%w', timestamp/1000,'unixepoch') AS INTEGER) AS day_of_week,
-                      CAST(strftime('%H', timestamp/1000,'unixepoch') AS INTEGER) AS hour,
+            f"""SELECT CAST(strftime('%w', timestamp/1000,'unixepoch','localtime') AS INTEGER) AS day_of_week,
+                      CAST(strftime('%H', timestamp/1000,'unixepoch','localtime') AS INTEGER) AS hour,
                       COUNT(*) AS count
                FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'
                GROUP BY day_of_week, hour""",
@@ -71,8 +71,8 @@ def get_dashboard_data(group_id: str, days: int = 30, period: str = "all") -> di
 
         # 近期以日期維度的每日 24 小時熱力分佈 (供精確日期檢視)
         recent_date_heatmap = conn.execute(
-            f"""SELECT date(timestamp/1000,'unixepoch') AS date,
-                      CAST(strftime('%H', timestamp/1000,'unixepoch') AS INTEGER) AS hour,
+            f"""SELECT date(timestamp/1000,'unixepoch','localtime') AS date,
+                      CAST(strftime('%H', timestamp/1000,'unixepoch','localtime') AS INTEGER) AS hour,
                       COUNT(*) AS count
                FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'
                GROUP BY date, hour ORDER BY date DESC, hour ASC""",
@@ -127,7 +127,7 @@ def _compute_group_health(conn, group_id: str, pf: str, pp: list) -> dict:
         f"SELECT COUNT(*) FROM messages WHERE group_id=?{pf}", (group_id, *pp)
     ).fetchone()[0]
     active_days = conn.execute(
-        f"""SELECT COUNT(DISTINCT date(timestamp/1000,'unixepoch'))
+        f"""SELECT COUNT(DISTINCT date(timestamp/1000,'unixepoch','localtime'))
            FROM messages WHERE group_id=?{pf}""",
         (group_id, *pp),
     ).fetchone()[0] or 0
@@ -213,7 +213,7 @@ def _compute_weekly_trend(conn, group_id: str, weeks: int = 8) -> dict:
     day_ms = 86_400_000
     since = now_ms - weeks * 7 * day_ms
     rows = conn.execute(
-        """SELECT strftime('%Y-%W', timestamp/1000,'unixepoch') AS week,
+        """SELECT strftime('%Y-%W', timestamp/1000,'unixepoch','localtime') AS week,
                   COUNT(*) AS count,
                   COUNT(DISTINCT user_id) AS active_users
            FROM messages WHERE group_id=? AND timestamp >= ?
@@ -246,7 +246,7 @@ def _monthly_and_seasonality(conn, group_id: str, period: str):
     # 月趨勢：若 period 指定年，限該年；否則全部
     if start is not None:
         month_rows = conn.execute(
-            """SELECT strftime('%Y-%m', timestamp/1000,'unixepoch') AS month,
+            """SELECT strftime('%Y-%m', timestamp/1000,'unixepoch','localtime') AS month,
                       COUNT(*) AS count
                FROM messages WHERE group_id=? AND timestamp >= ? AND timestamp < ?
                GROUP BY month ORDER BY month ASC""",
@@ -254,7 +254,7 @@ def _monthly_and_seasonality(conn, group_id: str, period: str):
         ).fetchall()
     else:
         month_rows = conn.execute(
-            """SELECT strftime('%Y-%m', timestamp/1000,'unixepoch') AS month,
+            """SELECT strftime('%Y-%m', timestamp/1000,'unixepoch','localtime') AS month,
                       COUNT(*) AS count
                FROM messages WHERE group_id=?
                GROUP BY month ORDER BY month ASC""",
@@ -272,7 +272,7 @@ def _monthly_and_seasonality(conn, group_id: str, period: str):
         prev = count
 
     season_rows = conn.execute(
-        """SELECT CAST(strftime('%m', timestamp/1000,'unixepoch') AS INTEGER) AS month,
+        """SELECT CAST(strftime('%m', timestamp/1000,'unixepoch','localtime') AS INTEGER) AS month,
                   COUNT(*) AS count
            FROM messages WHERE group_id=?
            GROUP BY month ORDER BY month ASC""",

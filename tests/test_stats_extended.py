@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import time
+from datetime import datetime
 import pytest
 from travel.db import init_db, get_conn
 from travel.migrations import migrate
@@ -53,9 +54,10 @@ def test_leaderboard_rankings_order(temp_db):
 
 def test_leaderboard_night_owl(temp_db):
     from travel.stats_extended import get_leaderboard_data
-    # 凌晨 2 點 UTC = 2025-01-01 02:00:00 → timestamp in ms
-    night_ts = 1735693200000  # 2025-01-01 02:00 UTC
-    day_ts   = 1735722000000  # 2025-01-01 10:00 UTC
+    # 本機時區（localtime）的凌晨 2 點與白天 10 點 → timestamp in ms
+    local_tz = datetime.now().astimezone().tzinfo
+    night_ts = int(datetime(2025, 1, 1, 2, 0, tzinfo=local_tz).timestamp() * 1000)
+    day_ts   = int(datetime(2025, 1, 1, 10, 0, tzinfo=local_tz).timestamp() * 1000)
     with get_conn() as conn:
         _insert_msg(conn, msg_id="n1", user_id="uA", user_name="Alice", timestamp=night_ts)
         _insert_msg(conn, msg_id="n2", user_id="uA", user_name="Alice", timestamp=night_ts + 60000)
@@ -239,9 +241,10 @@ def test_profile_summary(temp_db):
 
 def test_profile_time_slots(temp_db):
     from travel.stats_extended import get_profile_data
-    # 凌晨 2 點 (hour=2)，白天 10 點 (hour=10)
-    night_ts = 1735693200000  # 02:00 UTC
-    day_ts   = 1735722000000  # 10:00 UTC
+    # 本機時區（localtime）的凌晨 2 點 (hour=2)，白天 10 點 (hour=10)
+    local_tz = datetime.now().astimezone().tzinfo
+    night_ts = int(datetime(2025, 1, 1, 2, 0, tzinfo=local_tz).timestamp() * 1000)
+    day_ts   = int(datetime(2025, 1, 1, 10, 0, tzinfo=local_tz).timestamp() * 1000)
     with get_conn() as conn:
         _insert_msg(conn, msg_id="ps1", user_id="uA", user_name="A", timestamp=night_ts)
         _insert_msg(conn, msg_id="ps2", user_id="uA", user_name="A", timestamp=day_ts)

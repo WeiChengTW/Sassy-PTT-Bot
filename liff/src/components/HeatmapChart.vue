@@ -138,8 +138,13 @@ const dateGrid = computed(() => {
   return m
 })
 
-const maxDateCount = computed(() =>
-  Math.max(1, ...(props.dateData || []).map((c) => c.count)))
+const dateMaxMap = computed(() => {
+  const m = new Map<string, number>()
+  for (const c of props.dateData || []) {
+    m.set(c.date, Math.max(m.get(c.date) || 0, c.count))
+  }
+  return m
+})
 
 function dateCountAt(date: string, hour: number) {
   return dateGrid.value.get(`${date}-${hour}`) || 0
@@ -147,7 +152,8 @@ function dateCountAt(date: string, hour: number) {
 
 function dateCellColor(date: string, hour: number) {
   const v = dateCountAt(date, hour)
-  const alpha = v === 0 ? 0 : 0.15 + 0.85 * (v / maxDateCount.value)
+  const dayMax = dateMaxMap.value.get(date) || 1
+  const alpha = v === 0 ? 0 : 0.15 + 0.85 * (v / dayMax)
   return {
     ...cellStyle,
     backgroundColor: v === 0 ? '#f1f5f9' : `rgba(99,102,241,${alpha.toFixed(3)})`,

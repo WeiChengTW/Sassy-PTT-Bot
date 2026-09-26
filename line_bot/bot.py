@@ -8,6 +8,7 @@ from logging.handlers import RotatingFileHandler
 import re
 import asyncio
 import threading
+import unicodedata
 import subprocess
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -17,11 +18,12 @@ from pathlib import Path
 import chromadb
 from chromadb.utils import embedding_functions
 from openai import AsyncOpenAI
+from pypinyin import lazy_pinyin
 
 
 # LINE SDK (optional)
 try:
-    from flask import Flask, request, abort
+    from flask import Flask, request, abort, jsonify
     from linebot.v3 import WebhookHandler
     from linebot.v3.messaging import (
         Configuration, ApiClient, MessagingApi,
@@ -118,6 +120,8 @@ SYSTEM_PROMPT = (
     "4. 鼓勵適度指名道姓、自然引用群組回憶或群友黑歷史開酸（例如：『鄒易庭不就...』、『楊哲嘉你...』），讓吐槽更有老朋友互嗆的臨場感。\n"
     "5. 不要重複前幾輪已用過的句型或起手式。\n"
     "6. 只輸出角色的一句話回應，不加解釋、不加標籤、不加引導文字。\n"
+    "7. 吐槽點要多樣化：不要每次都用同一招開酸（例如一直嗆失智、失憶、夜店、身分證）。\n"
+    "   換不同角度切入，例如外號、經典事蹟、財力、感情狀態、身材、近況等，避免同樣的梗反覆出現。\n"
     "風格參考：直接點評事情本質，用輕描淡寫的方式諷刺，像是在 PTT 留言串底下的神回覆。"
 )
 
@@ -159,6 +163,16 @@ def _select_examples(user_text: str, k_top: int = 2, k_random: int = 3) -> list[
     return chosen
 
 
+def _detect_used_insults(responses: list[str]) -> list[str]:
+    """從近幾輪回應中找出已用過的吐槽關鍵字，避免下一輪重複嗆同一件事。"""
+    used: list[str] = []
+    for r in responses:
+        for kw in ("失智", "失憶", "夜店", "身分證", "身分証", "男廁", "吐", "醉", "gay", "甲", "肥", "宅", "窮", "單身", "處男"):
+            if kw in r and kw not in used:
+                used.append(kw)
+    return used
+
+
 def _format_examples(chosen: list[tuple[str, str]]) -> str:
     return "\n\n".join(f"網友說：「{q}」\n回應：{a}" for q, a in chosen)
 
@@ -168,8 +182,8 @@ def should_trigger(text, always=False):
     if always:
         return True
     if any(kw in text for kw in TRIGGER_KEYWORDS):
-        return random.random() < 0.3
-    return random.random() < 0.1
+        return random.random() < 0.15
+    return random.random() < 0.03
 
 
 # ── Bot trigger helpers（module-level 可獨立測試）──────────────────────────
@@ -195,6 +209,24 @@ def _resolve_context_for_short_message(user_text: str, history: list[dict]) -> s
             sender = t.get("sender", "群友")
             return f"{sender} 說的「{text}」"
     return None
+
+
+G8_REPLY = "對了！說到雞..."
+_G8_LATIN_RE = re.compile(r'(?<![A-Za-z0-9])(?:g8|jb)(?![A-Za-z0-9])', re.IGNORECASE)
+
+
+def is_g8(text: str) -> bool:
+    """G8 偵查器：相鄰兩字讀音為 ji + ba（不論聲調，中間夾空白/標點/符號也算），或出現 G8 / JB。"""
+    if not text:
+        return False
+    if _G8_LATIN_RE.search(text):
+        return True
+    # errors 回傳逐字 list，讓非中文字也各佔一格；再濾掉空白、標點(P*)、符號(S*)
+    syllables = [
+        s for s in lazy_pinyin(text, errors=lambda x: list(x))
+        if not (len(s) == 1 and (s.isspace() or unicodedata.category(s)[0] in "PS"))
+    ]
+    return any(a == "ji" and b == "ba" for a, b in zip(syllables, syllables[1:]))
 
 
 def is_group_bare_mention(event) -> bool:
@@ -263,11 +295,14 @@ class SassyBrain:
         else:
             self.fallback_client = None
             logger.warning("[LLM] CGU_LLM_API_KEY 未設定，fallback 停用")
-        self._llm_sem = threading.Semaphore(3)       # @mention / 私訊排隊用
+        self._llm_sem = threading.Semaphore(2)       # @mention / 私訊排隊用（並發 2 兼顧同時兩人與避免觸發 429 限流）
         self._spontaneous_lock = threading.Lock()    # 隨機觸發防並發重疊
 
         self._chat_histories: dict[str, list[dict]] = {}  # chat_id → [{"sender", "text", "role"}, ...]
         self._user_names: dict[str, str] = {}       # LINE user_id → display_name (lazy fetch + cache)
+        self._reranker = None                        # lazy-load 的 cross-encoder reranker
+        self._event_inject_ts: dict[str, float] = {}  # 事件 id → 上次注入時間（防高頻事件洗版）
+        self._person_inject_ts: dict[str, float] = {}  # 成員名 → 上次完整注入時間（防同一人設/梗洗版）
 
         # LINE setup
         self.line_api = None
@@ -700,6 +735,23 @@ class SassyBrain:
         # ★ 1. 不管有沒有觸發，都先把 user 訊息寫進歷史
         self._record_turn(line_chat_id, sender, clean_text, "user")
 
+        # G8 偵查器：ji+ba 同音詞 → 引用該則訊息回覆，優先於 LLM（reply token 只能用一次）
+        if is_g8(clean_text):
+            qt = event.message.quote_token
+            try:
+                self.line_api.reply_message(
+                    ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[LineTextMessage(text=G8_REPLY, **({'quote_token': qt} if qt else {}))],
+                    ),
+                    _request_timeout=_LINE_API_TIMEOUT,
+                )
+                logger.info(f"[G8] 偵測到: {repr(clean_text[:30])}")
+                self._record_turn(line_chat_id, "鍵盤俠", G8_REPLY, "bot")
+            except Exception as e:
+                logger.error(f"[G8] 回覆失敗: {e}")
+            return
+
         if should_trigger(clean_text, always=(is_direct or is_mentioned)):
             reply_token = event.reply_token
             quote_token = event.message.quote_token
@@ -817,6 +869,81 @@ class SassyBrain:
             seen.add(c[2])
         return found
 
+    @staticmethod
+    def _label_snippet_time(text: str, ts_ms: int | None) -> str:
+        """若 ts_ms 距今超過 180 天，在 snippet 前加 〔YYYY/MM〕 時間標記。
+
+        讓 LLM 知道這是古老記憶而非現在發生的事，避免誤用。
+        ts_ms 為 None 或距今 <= 180 天則不標（近期訊息無需標）。
+        """
+        if not ts_ms:
+            return text
+        import time as _time
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        age_days = (_time.time() - ts_ms / 1000) / 86400
+        if age_days <= 180:
+            return text
+        tz = _tz(_td(hours=8))
+        label = _dt.fromtimestamp(ts_ms / 1000, tz).strftime("%Y/%m")
+        return f"〔{label}〕{text}"
+
+    def _get_reranker(self):
+        """lazy-load cross-encoder reranker（BAAI/bge-reranker-base）。
+
+        首次呼叫載入約 1.1GB 模型；失敗回傳 None（略過 rerank，維持原排序）。
+        """
+        if self._reranker is None:
+            try:
+                from sentence_transformers import CrossEncoder
+                self._reranker = CrossEncoder(
+                    "BAAI/bge-reranker-base", max_length=512
+                )
+                logger.info("[RERANK] bge-reranker-base 已載入")
+            except Exception as e:
+                logger.warning(f"[RERANK] reranker 載入失敗（略過 rerank）: {e}")
+                self._reranker = False  # 記住失敗，避免每次重載
+        return self._reranker if self._reranker else None
+
+    @staticmethod
+    def _nickname_map() -> dict[str, list[str]]:
+        """從 aliases.json 讀取本名 → 暱稱對照（每次即時撈，改檔立刻生效）。"""
+        from corpus_config import load_aliases
+        raw = load_aliases()
+        return {k: v.get("aliases", []) for k, v in raw.items() if v.get("aliases")}
+
+    @staticmethod
+    def _nickname_prompt(name: str) -> str:
+        """產生「本名／隨機暱稱」稱呼指令。name 為本名，回傳一份 prompt 片段。"""
+        nicks = SassyBrain._nickname_map().get(name)
+        if not nicks:
+            return ""
+        nick_str = "、".join(nicks[:3])
+        return (
+            f"稱呼 {name} 時，本名與暱稱（{nick_str}）隨機輪用，例如這句叫「{name}」、"
+            f"下句改叫「{random.choice(nicks)}」，自然混著用更像真人。\n"
+        )
+
+    @staticmethod
+    def _query_time_filter(query: str) -> dict | None:
+        """偵測 query 內的時間線索，回傳 Chroma where 條件限定 last_ts 範圍。
+
+        例：「最近」「昨天」「前陣子」「高中」等 → 限定時間窗；無線索回 None（不濾）。
+        """
+        import re as _re, time as _time
+        q = query.strip()
+        if not q:
+            return None
+        now = _time.time() * 1000
+        # 近因導向詞：只撈近期
+        recent_terms = ("最近", "前幾天", "昨天", "前天", "今天", "上週", "這週", "這兩天", "剛")
+        if any(t in q for t in recent_terms):
+            return {"last_ts": {"$gte": int(now - 30 * 86400 * 1000)}}  # 近 30 天
+        # 過去事件導向詞：排除近期（撈 >30 天前的舊記憶）
+        past_terms = ("高中", "以前", "當初", "當時", "那時候", "以前", "幾年前", "上學期", "疫情", "隔離", "畢旅", "學測", "指考")
+        if any(t in q for t in past_terms):
+            return {"last_ts": {"$lte": int(now - 30 * 86400 * 1000)}}  # >30 天前
+        return None
+
     def get_group_snippets(self, query, history_text="", n_results=2):
         """檢索主群組記憶（對話視窗），支援關鍵人物與語意向量混合檢索。
 
@@ -834,12 +961,21 @@ class SassyBrain:
             
             # A. 事件百科匹配 (Event Knowledge Base)
             events = load_events()
+            # 同事件短時間（15 分鐘）內不重複注入，避免高頻事件洗版（如夜店/身分證）
+            import time as _t
+            _now = _t.time()
+            random.shuffle(events)  # 每次注入順序不同，避免固定某一事件總排最前
             for ev in events:
                 hit = any(kw in full_text for kw in ev.get("keywords", []))
                 if not hit and any(ch in query for ch in ev.get("characters", [])):
                     # 若直接在問這個人，且事件包含該人
                     hit = True
                 if hit:
+                    ev_id = ev.get("id", ev.get("name", ""))
+                    last_inj = self._event_inject_ts.get(ev_id, 0)
+                    if _now - last_inj < 900:  # 15 分鐘內已注入過 → 略過
+                        continue
+                    self._event_inject_ts[ev_id] = _now
                     ev_doc = (
                         f"【群組重大歷史事件：{ev['name']}】\n"
                         f"事件重點：{ev['summary']}\n"
@@ -859,37 +995,52 @@ class SassyBrain:
                         aliases = [member_name] + GROUP_ALIAS_MAP.get(member_name, [])
                         alias_str = "、".join(aliases)
                         alias_conditions = " OR ".join("user_name=?" for _ in aliases)
-                        
-                        # 注入清晰的外號/本名與事蹟
-                        lore_text = "；事蹟：" + " / ".join(lore) if lore else ""
-                        hint = f"群組成員身分：{member_name}（外號/別名：{alias_str}；身分：{desc}{lore_text}）"
+
+                        # 人物百科頻率抑制：同一成員 5 分鐘內被重複點名時，
+                        # 只保留身分一行，跳過完整 description/lore 與代表性發言，
+                        # 避免單一梗（如 Edward、身分證）被反覆注入洗版
+                        _now3 = _t.time()
+                        _person_last = self._person_inject_ts.get(member_name, 0)
+                        _full_inject = (_now3 - _person_last >= 300)
+                        if _full_inject:
+                            self._person_inject_ts[member_name] = _now3
+
+                        if _full_inject:
+                            # 注入清晰的外號/本名與事蹟
+                            lore_text = "；事蹟：" + " / ".join(lore) if lore else ""
+                            hint = f"群組成員身分：{member_name}（外號/別名：{alias_str}；身分：{desc}{lore_text}）"
+                        else:
+                            hint = f"群組成員身分：{member_name}（外號/別名：{alias_str}，已於前幾輪介紹過）"
                         if hint not in person_snippets:
                             person_snippets.append(hint)
 
-                        # 該成員代表性發言
-                        rows_spk = conn.execute(
-                            f"""SELECT content, user_name FROM messages 
-                                WHERE ({alias_conditions}) AND type='text' 
-                                  AND content NOT LIKE '[%' AND LENGTH(content) > 6
-                                ORDER BY LENGTH(content) DESC LIMIT 1""",
-                            tuple(aliases),
-                        ).fetchall()
-                        for r in rows_spk:
-                            c = r["content"].replace("\n", " ")[:150]
-                            person_snippets.append(f"{r['user_name']}: {c}")
+                        if _full_inject:
+                            # 該成員代表性發言
+                            rows_spk = conn.execute(
+                                f"""SELECT content, user_name, timestamp FROM messages 
+                                    WHERE ({alias_conditions}) AND type='text' 
+                                      AND content NOT LIKE '[%' AND LENGTH(content) > 6
+                                    ORDER BY LENGTH(content) DESC LIMIT 1""",
+                                tuple(aliases),
+                            ).fetchall()
+                            for r in rows_spk:
+                                c = r["content"].replace("\n", " ")[:150]
+                                raw = f"{r['user_name']}: {c}"
+                                person_snippets.append(self._label_snippet_time(raw, r["timestamp"]))
 
-                        # 別人提及該成員及其外號的對話
-                        mention_conds = " OR ".join("content LIKE ?" for _ in aliases)
-                        mention_params = [f"%{a}%" for a in aliases]
-                        rows_men = conn.execute(
-                            f"""SELECT user_name, content FROM messages 
-                                WHERE ({mention_conds}) AND type='text'
-                                ORDER BY LENGTH(content) DESC LIMIT 1""",
-                            tuple(mention_params),
-                        ).fetchall()
-                        for r in rows_men:
-                            c = r["content"].replace("\n", " ")[:150]
-                            person_snippets.append(f"{r['user_name']}: {c}")
+                            # 別人提及該成員及其外號的對話
+                            mention_conds = " OR ".join("content LIKE ?" for _ in aliases)
+                            mention_params = [f"%{a}%" for a in aliases]
+                            rows_men = conn.execute(
+                                f"""SELECT user_name, content, timestamp FROM messages 
+                                    WHERE ({mention_conds}) AND type='text'
+                                    ORDER BY LENGTH(content) DESC LIMIT 1""",
+                                tuple(mention_params),
+                            ).fetchall()
+                            for r in rows_men:
+                                c = r["content"].replace("\n", " ")[:150]
+                                raw = f"{r['user_name']}: {c}"
+                                person_snippets.append(self._label_snippet_time(raw, r["timestamp"]))
 
                 # 關鍵字與歷史事件檢索（如：夜店、身分證、酩酊大醉、水晶、黃心如等）
                 import re, time
@@ -919,17 +1070,21 @@ class SassyBrain:
                         person_snippets.append(crystal_doc)
 
                 # 特殊黑歷史事件專屬對焦（夜店 / 酩酊大醉 / 沒帶身分證 / 男廁吐）
-                if any(k in query for k in ("醉", "夜店", "身分證", "身份證", "證件", "男廁", "阿嬤", "下藥")):
-                    rows_night = conn.execute(
-                        """SELECT user_name, content FROM messages 
-                           WHERE timestamp BETWEEN 1757174400000 AND 1757260800000 
-                             AND (content LIKE '%醉%' OR content LIKE '%身分證%' OR content LIKE '%男廁%' OR content LIKE '%夜店%' OR content LIKE '%吐%')
-                           ORDER BY timestamp ASC LIMIT 8"""
-                    ).fetchall()
-                    if rows_night:
-                        doc_night = "群組歷史回憶（2025/9/7 夜店事件）：\n" + "\n".join(f"{rn['user_name']}: {rn['content'].replace(chr(10), ' ')[:100]}" for rn in rows_night)
-                        if doc_night not in person_snippets:
-                            person_snippets.append(doc_night)
+                night_kws = ("醉", "夜店", "身分證", "身份證", "證件", "男廁", "阿嬤", "下藥")
+                if any(k in query for k in night_kws):
+                    _now2 = _t.time()
+                    if _now2 - self._event_inject_ts.get("nightclub_drunk_and_id_card", 0) >= 1800:
+                        rows_night = conn.execute(
+                            """SELECT user_name, content FROM messages 
+                               WHERE timestamp BETWEEN 1757174400000 AND 1757260800000 
+                                 AND (content LIKE '%醉%' OR content LIKE '%身分證%' OR content LIKE '%男廁%' OR content LIKE '%夜店%' OR content LIKE '%吐%')
+                               ORDER BY timestamp ASC LIMIT 3"""
+                        ).fetchall()
+                        if rows_night:
+                            self._event_inject_ts["nightclub_drunk_and_id_card"] = _now2
+                            doc_night = "群組歷史回憶（2025/9/7 夜店事件）：\n" + "\n".join(f"{rn['user_name']}: {rn['content'].replace(chr(10), ' ')[:100]}" for rn in rows_night)
+                            if doc_night not in person_snippets:
+                                person_snippets.append(doc_night)
 
                 # A. 多關鍵詞交集事件檢索（例如：夜店 + 身分證）
                 if len(entity_keywords) >= 2:
@@ -951,7 +1106,7 @@ class SassyBrain:
                         ).fetchall()
                         doc = "\n".join(f"{w['user_name']}: {w['content'].replace(chr(10), ' ')[:100]}" for w in win if len(w['content']) > 1)
                         if doc and doc not in person_snippets:
-                            person_snippets.append(doc)
+                            person_snippets.append(self._label_snippet_time(doc, ts))
 
                 # B. 精確關鍵詞檢索（包含記事本標題，如 彥中哥酩酊大醉.mp4）
                 for kw in entity_keywords[:3]:
@@ -966,19 +1121,62 @@ class SassyBrain:
                         c = r["content"].replace("\n", " ")[:200]
                         line = f"{r['user_name']}: {c}"
                         if line not in person_snippets:
-                            person_snippets.append(line)
+                            person_snippets.append(self._label_snippet_time(line, r["timestamp"]))
         except Exception as e:
             logger.warning(f"實體記憶提取失敗（略過）: {e}")
 
-        # 2. 語意向量檢索補充
+        # 2. 語意向量檢索補充（先撈候選 → 時間過濾 → rerank → 取 top）
         try:
             combined = f"{query} {history_text}".strip() if history_text else query.strip()
             if hasattr(self, "group_collection") and self.group_collection is not None:
-                results = self.group_collection.query(query_texts=[combined], n_results=n_results)
+                # rerank 是 CPU 上的 cross-encoder，候選數直接決定延遲：20 對≈24s、5 對≈2s。
+                # 撈足量候選做時間簇去重，但只對前幾筆做 rerank，避免拖垮回應速度。
+                fetch_n = max(n_results * 3, 5)  # 撈少量候選即可（含 rerank 排序）
+                where_filter = self._query_time_filter(query)
+                query_kwargs = dict(
+                    query_texts=[combined],
+                    n_results=fetch_n,
+                    include=["documents", "metadatas"],
+                )
+                if where_filter:
+                    query_kwargs["where"] = where_filter
+                results = self.group_collection.query(**query_kwargs)
                 docs = results['documents'][0] if results and results.get('documents') else []
-                for d in docs:
-                    if d and d not in person_snippets and d not in vector_snippets:
-                        vector_snippets.append(d)
+                metas = results['metadatas'][0] if results and results.get('metadatas') else []
+                candidates = [
+                    (d, m) for d, m in zip(docs, metas)
+                    if d and d not in person_snippets
+                ]
+                # cross-encoder rerank：候選過多才需要重排
+                reranker = self._get_reranker()
+                if reranker is not None and len(candidates) > n_results:
+                    try:
+                        scores = reranker.predict(
+                            [(combined, c[0]) for c in candidates]
+                        )
+                        ordered = [
+                            c for _, c in sorted(zip(scores, candidates), key=lambda x: -x[0])
+                        ]
+                    except Exception as e:
+                        logger.warning(f"[RERANK] rerank 失敗，維持原序: {e}")
+                        ordered = candidates
+                else:
+                    ordered = candidates
+                # 時間簇去重：同一事件（last_ts 落在 ±1 小時內）只保留一個視窗，
+                # 避免 2025/9/7 夜店那類單一事件的多則視窗同時進場洗版
+                _hour_bucket: set[int] = set()
+                for d, m in ordered:
+                    ts = (m or {}).get("last_ts")
+                    if ts:
+                        bucket = int(ts / 3_600_000)
+                        if bucket in _hour_bucket:
+                            continue
+                        _hour_bucket.add(bucket)
+                    if d not in vector_snippets:
+                        labeled = self._label_snippet_time(d, ts)
+                        vector_snippets.append(labeled)
+                    if len(vector_snippets) >= n_results:
+                        break
         except Exception as e:
             logger.warning(f"群組記憶向量檢索失敗（略過）: {e}")
 
@@ -1100,15 +1298,15 @@ class SassyBrain:
                     model=model,
                     messages=messages,
                     temperature=1.0,
-                    max_completion_tokens=2000,
+                    max_completion_tokens=128,
                     timeout=LLM_TIMEOUT,
                 )
                 return resp.choices[0].message.content or ""
             except Exception as e:
                 err = str(e)
                 if "429" in err and attempt < 2:
-                    logger.warning(f"[{tag}] 429 rate limit，5s 後重試 (attempt {attempt+1})")
-                    await asyncio.sleep(5)
+                    logger.warning(f"[{tag}] 429 rate limit，2s 後重試 (attempt {attempt+1})")
+                    await asyncio.sleep(2)
                 elif "timeout" in err.lower() or "timed out" in err.lower():
                     logger.warning(f"[{tag}] timeout ({LLM_TIMEOUT}s)")
                     return None
@@ -1167,12 +1365,28 @@ class SassyBrain:
                 query_for_memory = f"{context_hint} {user_text}".strip() if context_hint else user_text
                 snippets = self.get_group_snippets(query_for_memory)
             if snippets:
-                bullets = "\n".join(f"「{s}」" for s in snippets)
+                # 截斷每個 snippet 至 200 字，縮短 prompt 加速生成
+                bullets = "\n".join(f"「{s[:200]}」" for s in snippets)
                 group_memory = (
                     "群組相關回憶（可以自然引用當梗吐槽，例如『某某不是才剛...』；引用時可適度指名道姓）：\n"
+                    "【注意】標有〔YYYY/MM〕的是高中時期或以前的舊事，引用時要點明「那時候」或「以前」，不要當成現在發生的事。\n"
                     f"{bullets}\n\n"
                 )
             group_persona = "你也是這個群組的老成員，記得大家以前聊過的事、認識群裡每個人，能自然接梗並點名吐槽。\n"
+
+            # 稱呼隨機化：只對「本波對話相關的人」注入本名/暱稱混用指令
+            relevant_names: list[str] = []
+            if current_speaker:
+                relevant_names.append(current_speaker)
+            for s in (snippets or []):
+                for canonical in GROUP_ALIAS_MAP:
+                    if canonical in s and canonical not in relevant_names:
+                        relevant_names.append(canonical)
+            nickname_hint = "".join(
+                self._nickname_prompt(n) for n in relevant_names[:3]
+            )
+            if nickname_hint:
+                group_persona += f"稱呼小提醒：\n{nickname_hint}"
 
         cached_news = self._load_news_cache() if hasattr(self, "_news_cache_path") else []
         news_hint = ""
@@ -1185,10 +1399,18 @@ class SassyBrain:
         if chat_id:
             recent_resp = self._recent_bot_responses(chat_id, n=3)
             if recent_resp:
+                # 從前幾輪回應抓出已用過的吐槽關鍵字，明確禁止再嗆同一件事
+                _used_insults = _detect_used_insults(recent_resp)
+                _insult_hint = (
+                    f"嚴禁再嗆「{'、'.join(_used_insults)}」（前幾輪已用過，換全新角度）：\n"
+                    if _used_insults else ""
+                )
                 anti_repeat = (
                     "前幾輪 bot 已講過的回應（不得重複相同句型或相同吐槽點，請切入不同角度）：\n"
                     + "\n".join(f"- {r}" for r in recent_resp)
                     + "\n\n"
+                    + _insult_hint
+                    + "\n"
                 )
 
         if is_direct:
@@ -1593,6 +1815,10 @@ def run_line_server(brain: SassyBrain):
         except InvalidSignatureError:
             abort(400)
         return 'OK'
+
+    @flask_app.route("/performance", methods=['GET'])
+    def performance():
+        return jsonify({"status": "ok", "message": "Sassy PTT Bot is running"}), 200
 
     logger.info(f"LINE webhook server 啟動於 port {LINE_WEBHOOK_PORT}")
     flask_app.run(host="0.0.0.0", port=LINE_WEBHOOK_PORT, threaded=True, use_reloader=False)

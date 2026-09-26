@@ -109,6 +109,26 @@ from line_bot.chat_summary import (  # noqa: E402
     summary_header,
     too_short_reply,
 )
+from line_bot.group_qa import (  # noqa: E402
+    QA_INTENT_MODEL,
+    QA_MODEL,
+    RECENT_MSGS as QA_RECENT_MSGS,
+    build_answer_messages,
+    build_intent_messages,
+    RECENT_DAYS as QA_RECENT_DAYS,
+    empty_question_reply,
+    expand_date_keywords,
+    fetch_text_messages as fetch_qa_messages,
+    fetch_trips as fetch_qa_trips,
+    format_trip_facts,
+    parse_intent,
+    parse_qa_command,
+    search_windows,
+    today_label as qa_today_label,
+)
+# 問答第 1 步只抽關鍵字：輕量模型、短逾時
+_QA_INTENT_MAX_TOKENS = 1500
+_QA_INTENT_TIMEOUT = 10.0
 
 TRIGGER_KEYWORDS = [
     # 疑問句
@@ -768,6 +788,15 @@ class SassyBrain:
             self._handle_summary_request(event, line_chat_id, sender)
             return
 
+        # 群組問答：@機器人 ？問題 → 從全部聊天紀錄 + 旅行紀錄找答案；只打「？」直接嗆
+        qa_question = parse_qa_command(clean_text) if is_mentioned and event.source.type == "group" else None
+        if qa_question is not None:
+            if qa_question:
+                self._handle_qa_request(event, line_chat_id, sender, qa_question)
+            else:
+                self._quoted_replier(event, line_chat_id, "QA")(empty_question_reply())
+            return
+
         # G8 偵查器：ji+ba 同音詞 → 引用該則訊息回覆，優先於 LLM（reply token 只能用一次）
         if is_g8(clean_text):
             qt = event.message.quote_token
@@ -827,11 +856,10 @@ class SassyBrain:
                         self._spontaneous_lock.release()
                 threading.Thread(target=reply_spontaneous, daemon=True).start()
 
-    def _handle_summary_request(self, event, chat_id: str, asker: str) -> None:
-        """背景撈這一輪對話 → LLM 摘要 → 引用發問訊息回覆。"""
+    def _quoted_replier(self, event, chat_id: str, tag: str):
+        """回傳 reply(text)：引用發問訊息回覆並記入對話歷史。reply token 只能用一次，呼叫端只呼叫一次。"""
         reply_token = event.reply_token
         quote_token = event.message.quote_token
-        before_ts = int(getattr(event, "timestamp", 0)) or int(time.time() * 1000)
 
         def reply(text: str) -> None:
             try:
@@ -844,7 +872,14 @@ class SassyBrain:
                 )
                 self._record_turn(chat_id, "鍵盤俠", text, "bot")
             except Exception as e:
-                logger.error(f"[SUMMARY] 回覆失敗: {e}")
+                logger.error(f"[{tag}] 回覆失敗: {e}")
+
+        return reply
+
+    def _handle_summary_request(self, event, chat_id: str, asker: str) -> None:
+        """背景撈這一輪對話 → LLM 摘要 → 引用發問訊息回覆。"""
+        before_ts = int(getattr(event, "timestamp", 0)) or int(time.time() * 1000)
+        reply = self._quoted_replier(event, chat_id, "SUMMARY")
 
         def work():
             try:
@@ -872,6 +907,45 @@ class SassyBrain:
                 reply(f"{summary_header(msgs)}\n\n{raw.strip()}")
             else:
                 reply("懶人包產生失敗，我也懶得看了，自己爬 🫠")
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _handle_qa_request(self, event, chat_id: str, asker: str, question: str) -> None:
+        """`@機器人 ？問題`：LLM 抽關鍵字 → 搜全部聊天紀錄 → LLM 根據聊天 + 旅行紀錄回答。"""
+        before_ts = int(getattr(event, "timestamp", 0)) or int(time.time() * 1000)
+        reply = self._quoted_replier(event, chat_id, "QA")
+
+        def work():
+            if not self._llm_sem.acquire(timeout=_LLM_SEM_TIMEOUT):
+                logger.warning("[QA] semaphore 逾時，跳過")
+                return
+            try:
+                today = qa_today_label()
+                recent = format_transcript(
+                    fetch_summary_messages(chat_id, before_ts)[-QA_RECENT_MSGS:], with_date=True)
+                intent = parse_intent(asyncio.run(self._generate_with_fallback(
+                    build_intent_messages(question, recent, today),
+                    tag="QA_INTENT", primary_model=QA_INTENT_MODEL,
+                    max_tokens=_QA_INTENT_MAX_TOKENS, timeout=_QA_INTENT_TIMEOUT,
+                )), question)
+                keywords = expand_date_keywords(intent["keywords"], intent["question"])
+                windows = search_windows(fetch_qa_messages(chat_id, before_ts), keywords,
+                                         recent_since_ms=before_ts - QA_RECENT_DAYS * 86400 * 1000)
+                logger.info(f"[QA] {intent['question']!r} keywords={keywords} "
+                            f"→ {len(windows)} 段 {sum(map(len, windows))} 則")
+                windows_text = "\n---\n".join(format_transcript(w, with_date=True) for w in windows)
+                raw = asyncio.run(self._generate_with_fallback(
+                    build_answer_messages(intent["question"], asker, windows_text, recent, today,
+                                          trips_text=format_trip_facts(fetch_qa_trips(chat_id))),
+                    tag="QA", primary_model=QA_MODEL,
+                    max_tokens=_SUMMARY_MAX_TOKENS, timeout=_SUMMARY_TIMEOUT,
+                ))
+            except Exception as e:
+                logger.error(f"[QA] 失敗: {e}")
+                raw = None
+            finally:
+                self._llm_sem.release()
+            reply(raw.strip() if raw and raw.strip() else "翻了半天翻不出來，自己往上滑吧 🫠")
 
         threading.Thread(target=work, daemon=True).start()
 

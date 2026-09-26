@@ -62,17 +62,18 @@ def fetch_messages(group_id: str, before_ts: int) -> list[dict]:
     return [dict(r) for r in reversed(rows)]
 
 
-def _fmt_time(ts_ms: int) -> str:
-    return datetime.fromtimestamp(ts_ms / 1000, _TZ).strftime("%H:%M")
+def _fmt_time(ts_ms: int, with_date: bool = False) -> str:
+    return datetime.fromtimestamp(ts_ms / 1000, _TZ).strftime("%m/%d %H:%M" if with_date else "%H:%M")
 
 
-def format_transcript(msgs: list[dict]) -> str:
+def format_transcript(msgs: list[dict], with_date: bool = False) -> str:
+    """一行一則：`HH:MM 名字: 內容`；with_date=True 時為 `MM/DD HH:MM`（跨天逐字稿用）。"""
     lines = []
     for m in msgs:
         content = (m.get("content") or "").replace("\n", " ").strip()
         if m.get("type") != "text":
             content = _MEDIA_LABELS.get(m.get("type"), f"[{m.get('type')}]")
-        lines.append(f"{_fmt_time(m['timestamp'])} {m['user_name']}: {content[:MAX_CONTENT_CHARS]}")
+        lines.append(f"{_fmt_time(m['timestamp'], with_date)} {m['user_name']}: {content[:MAX_CONTENT_CHARS]}")
     return "\n".join(lines)
 
 

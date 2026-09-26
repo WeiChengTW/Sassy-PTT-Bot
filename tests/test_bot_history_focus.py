@@ -171,6 +171,27 @@ def test_nickname_prompt_includes_random_nickname():
     assert "陳諾威" in p
 
 
+def test_nickname_prompt_prefers_auto_nickname(monkeypatch):
+    """有自動稱號時，示範暱稱約 60% 抽自動稱號，並提示可以多用。"""
+    import random
+    from line_bot.bot import SassyBrain
+    monkeypatch.setattr(SassyBrain, "_nickname_map", staticmethod(lambda: {"甲": ["手寫"]}))
+    monkeypatch.setattr(SassyBrain, "_auto_nickname_map", staticmethod(lambda: {"甲": ["新稱號"]}))
+    random.seed(0)
+    prompts = [SassyBrain._nickname_prompt("甲") for _ in range(1000)]
+    auto_hits = sum("下句改叫「新稱號」" in p for p in prompts)
+    assert 500 < auto_hits < 700
+    assert "最近的新稱號" in prompts[0]
+
+
+def test_nickname_prompt_auto_only(monkeypatch):
+    """只有自動稱號、沒有手寫暱稱時也要能產生指令。"""
+    from line_bot.bot import SassyBrain
+    monkeypatch.setattr(SassyBrain, "_nickname_map", staticmethod(lambda: {}))
+    monkeypatch.setattr(SassyBrain, "_auto_nickname_map", staticmethod(lambda: {"甲": ["新稱號"]}))
+    assert "下句改叫「新稱號」" in SassyBrain._nickname_prompt("甲")
+
+
 def test_nickname_prompt_unknown_name_empty():
     """無暱稱記錄的名字應回傳空字串。"""
     from line_bot.bot import SassyBrain

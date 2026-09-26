@@ -5,7 +5,8 @@
         <span>🧳 群組旅行與活動</span>
       </h1>
       <router-link
-        to="/trips/create"
+        v-if="isAdmin"
+        to="/admin/trips/new"
         class="text-xs font-semibold px-3 py-1.5 rounded-xl bg-brand-600 text-white shadow-sm hover:bg-brand-700 active:scale-95 transition-all btn-press inline-flex items-center gap-1"
       >
         <span>➕</span>
@@ -27,7 +28,8 @@
     >
       <template #action>
         <router-link
-          to="/trips/create"
+          v-if="isAdmin"
+          to="/admin/trips/new"
           class="text-xs font-bold px-4 py-2 rounded-xl bg-brand-600 text-white shadow-sm btn-press inline-block"
         >
           立即發起旅行
@@ -105,7 +107,11 @@ import { emojiFor, labelFor } from '@/constants/tripTypes'
 import { rarityOf } from '@/constants/rarity'
 import ChipFilter from '@/components/ChipFilter.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import { useAuthStore } from '@/stores/auth'
 
+const auth = useAuthStore()
+// 建立旅行頁與 API 皆限管理員（router: /admin/trips/new）
+const isAdmin = computed(() => auth.role === 'admin')
 const trips = ref<any[]>([])
 const loading = ref(true)
 const activeType = ref('')

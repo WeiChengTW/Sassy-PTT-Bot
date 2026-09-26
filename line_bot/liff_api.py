@@ -7,7 +7,7 @@ import urllib.request
 from flask import Blueprint, request, jsonify
 
 from travel.stats import get_dashboard_data, get_trips_list, get_trip_detail, get_user_badges
-from travel.trip_crud import create_trip, add_participants, end_trip
+from travel.trip_crud import create_trip, add_participants, end_trip, set_participants
 from travel.badges import award_badges_for_trip
 from travel.stats_extended import (
     get_leaderboard_data, get_interaction_data,
@@ -335,8 +335,11 @@ def admin_add_participants(trip_id):
     if not _is_admin(user_id):
         return _forbid("not_admin")
     body = request.get_json() or {}
-    result = add_participants(trip_id, body.get("user_ids", []))
-    return jsonify(result)
+    user_ids = body.get("user_ids", [])
+    # replace=true：以勾選名單為準（沒勾的移除）；預設只新增，維持舊行為
+    if body.get("replace"):
+        return jsonify(set_participants(trip_id, user_ids))
+    return jsonify(add_participants(trip_id, user_ids))
 
 
 @liff_bp.route("/admin/trips/<trip_id>/end", methods=["POST"])
@@ -399,10 +402,12 @@ def admin_members():
         members = [dict(r) for r in rows]
         known = {m["user_id"] for m in members}
         # 安全網：把已說話但不在 members 表的送信者補進來（排除純匯入的合成 id）。
+        # manual:* 不在 members 表代表已被 reconcile_member 接回真實 id，只剩舊訊息掛著，
+        # 再補進來會變成同名重複（例：李孟倢出現兩次）。
         senders = conn.execute(
             """SELECT user_id, user_name, COUNT(*) AS msg_count
                FROM messages WHERE group_id=? AND user_name IS NOT NULL
-                 AND user_id NOT LIKE 'imported:%'
+                 AND user_id NOT LIKE 'imported:%' AND user_id NOT LIKE 'manual:%'
                GROUP BY user_id ORDER BY msg_count DESC""",
             (group_id,),
         ).fetchall()
@@ -524,3 +529,27 @@ def compare():
     if not a or not b:
         return jsonify({"error": "missing_users", "reason": "需要 a 與 b 兩個 user_id"}), 400
     return jsonify(get_compare_data(group_id, a, b, request.args.get("period", "all")))
+
+
+@liff_bp.route("/nicknames")
+def nicknames():
+    """機器人每週自動取的暫時稱號（只屬於主群），新取的排前面。"""
+    from corpus_config import load_aliases
+    from line_bot.auto_nickname import MAX_AUTO_ALIASES
+    user_id = _get_liff_user_id()
+    group_id = _resolve_group_id(user_id, _get_liff_group_id())
+    err = _require_member(user_id, group_id)
+    if err:
+        return err
+    members = []
+    if group_id and group_id == os.getenv("MAIN_LINE_GROUP_ID", ""):
+        for name, entry in load_aliases().items():
+            autos = entry.get("auto_aliases") or []
+            if autos:
+                members.append({
+                    "name": name,
+                    "aliases": entry.get("aliases", []),
+                    "auto_aliases": list(reversed(autos)),
+                })
+        members.sort(key=lambda m: m["auto_aliases"][0].get("created", ""), reverse=True)
+    return jsonify({"max_per_member": MAX_AUTO_ALIASES, "members": members})

@@ -92,6 +92,23 @@ _LINE_API_TIMEOUT = 5.0
 # LLM semaphore 等待上限（秒）。超過代表目前有兩個 LLM call 都在塞，
 # 與其無限等不如直接丟掉，避免 reply_token 過期後 silent fail。
 _LLM_SEM_TIMEOUT = 30.0
+# 聊天摘要：輸出較長、輸入可達數百則，放寬 token 與 timeout（仍需在 reply token 過期前回覆）
+_SUMMARY_MAX_TOKENS = 3000  # 含 thinking 約 1500，留餘裕
+_SUMMARY_TIMEOUT = 25.0
+# 稱呼示範時抽到「自動稱號」的機率（其餘抽手寫暱稱），讓新稱號比一般暱稱常出現
+_AUTO_NICK_PICK_PROB = 0.6
+
+from line_bot.chat_summary import (  # noqa: E402
+    MIN_MSGS as SUMMARY_MIN_MSGS,
+    SUMMARY_MODEL,
+    build_messages as build_summary_messages,
+    fetch_messages as fetch_summary_messages,
+    format_transcript,
+    is_summary_request,
+    select_round,
+    summary_header,
+    too_short_reply,
+)
 
 TRIGGER_KEYWORDS = [
     # 疑問句
@@ -364,6 +381,17 @@ class SassyBrain:
                 hour=3,
                 minute=0,
                 id='weekly_ptt_update',
+                misfire_grace_time=3600,
+                coalesce=True,
+            )
+            from line_bot.auto_nickname import run_weekly_nicknames
+            self._scheduler.add_job(
+                run_weekly_nicknames,
+                trigger='cron',
+                day_of_week='sun',
+                hour=4,
+                minute=0,
+                id='weekly_auto_nickname',
                 misfire_grace_time=3600,
                 coalesce=True,
             )
@@ -735,6 +763,11 @@ class SassyBrain:
         # ★ 1. 不管有沒有觸發，都先把 user 訊息寫進歷史
         self._record_turn(line_chat_id, sender, clean_text, "user")
 
+        # 聊天摘要：群組內 @機器人「現在是怎樣」→ 摘要這一輪
+        if is_mentioned and event.source.type == "group" and is_summary_request(clean_text):
+            self._handle_summary_request(event, line_chat_id, sender)
+            return
+
         # G8 偵查器：ji+ba 同音詞 → 引用該則訊息回覆，優先於 LLM（reply token 只能用一次）
         if is_g8(clean_text):
             qt = event.message.quote_token
@@ -793,6 +826,54 @@ class SassyBrain:
                     finally:
                         self._spontaneous_lock.release()
                 threading.Thread(target=reply_spontaneous, daemon=True).start()
+
+    def _handle_summary_request(self, event, chat_id: str, asker: str) -> None:
+        """背景撈這一輪對話 → LLM 摘要 → 引用發問訊息回覆。"""
+        reply_token = event.reply_token
+        quote_token = event.message.quote_token
+        before_ts = int(getattr(event, "timestamp", 0)) or int(time.time() * 1000)
+
+        def reply(text: str) -> None:
+            try:
+                self.line_api.reply_message(
+                    ReplyMessageRequest(
+                        reply_token=reply_token,
+                        messages=[LineTextMessage(text=text, **({'quote_token': quote_token} if quote_token else {}))],
+                    ),
+                    _request_timeout=_LINE_API_TIMEOUT,
+                )
+                self._record_turn(chat_id, "鍵盤俠", text, "bot")
+            except Exception as e:
+                logger.error(f"[SUMMARY] 回覆失敗: {e}")
+
+        def work():
+            try:
+                msgs = select_round(fetch_summary_messages(chat_id, before_ts))
+            except Exception as e:
+                logger.error(f"[SUMMARY] 撈訊息失敗: {e}")
+                reply("資料庫掛了，自己往上滑吧 🙃")
+                return
+            if len(msgs) < SUMMARY_MIN_MSGS:
+                reply(too_short_reply(len(msgs)))
+                return
+            if not self._llm_sem.acquire(timeout=_LLM_SEM_TIMEOUT):
+                logger.warning("[SUMMARY] semaphore 逾時，跳過")
+                return
+            try:
+                logger.info(f"[SUMMARY] 摘要 {len(msgs)} 則 (model={SUMMARY_MODEL})")
+                raw = asyncio.run(self._generate_with_fallback(
+                    build_summary_messages(format_transcript(msgs), asker),
+                    tag="SUMMARY", primary_model=SUMMARY_MODEL,
+                    max_tokens=_SUMMARY_MAX_TOKENS, timeout=_SUMMARY_TIMEOUT,
+                ))
+            finally:
+                self._llm_sem.release()
+            if raw and raw.strip():
+                reply(f"{summary_header(msgs)}\n\n{raw.strip()}")
+            else:
+                reply("懶人包產生失敗，我也懶得看了，自己爬 🫠")
+
+        threading.Thread(target=work, daemon=True).start()
 
     # ── Core logic ─────────────────────────────────────────────────────────
 
@@ -906,21 +987,40 @@ class SassyBrain:
 
     @staticmethod
     def _nickname_map() -> dict[str, list[str]]:
-        """從 aliases.json 讀取本名 → 暱稱對照（每次即時撈，改檔立刻生效）。"""
+        """從 aliases.json 讀取本名 → 手寫暱稱對照（每次即時撈，改檔立刻生效）。"""
         from corpus_config import load_aliases
         raw = load_aliases()
         return {k: v.get("aliases", []) for k, v in raw.items() if v.get("aliases")}
 
     @staticmethod
+    def _auto_nickname_map() -> dict[str, list[str]]:
+        """本名 → 機器人每週自動取的暫時稱號（新的在後）。"""
+        from corpus_config import load_aliases
+        raw = load_aliases()
+        return {
+            k: [a["name"] for a in v.get("auto_aliases", [])]
+            for k, v in raw.items() if v.get("auto_aliases")
+        }
+
+    @staticmethod
     def _nickname_prompt(name: str) -> str:
-        """產生「本名／隨機暱稱」稱呼指令。name 為本名，回傳一份 prompt 片段。"""
-        nicks = SassyBrain._nickname_map().get(name)
-        if not nicks:
+        """產生「本名／隨機暱稱」稱呼指令。name 為本名，回傳一份 prompt 片段。
+
+        有自動稱號時，示範用的暱稱有 _AUTO_NICK_PICK_PROB 機率抽自動稱號，並提示優先使用。
+        """
+        nicks = SassyBrain._nickname_map().get(name, [])
+        autos = SassyBrain._auto_nickname_map().get(name, [])
+        if not nicks and not autos:
             return ""
-        nick_str = "、".join(nicks[:3])
+        if autos and (not nicks or random.random() < _AUTO_NICK_PICK_PROB):
+            example = random.choice(autos)
+        else:
+            example = random.choice(nicks)
+        nick_str = "、".join(list(reversed(autos)) + nicks[:3])
+        auto_hint = f"其中「{'、'.join(autos)}」是他最近的新稱號，可以多用。" if autos else ""
         return (
             f"稱呼 {name} 時，本名與暱稱（{nick_str}）隨機輪用，例如這句叫「{name}」、"
-            f"下句改叫「{random.choice(nicks)}」，自然混著用更像真人。\n"
+            f"下句改叫「{example}」，自然混著用更像真人。{auto_hint}\n"
         )
 
     @staticmethod
@@ -1290,7 +1390,8 @@ class SassyBrain:
         history = self._chat_histories.get(chat_id, [])
         return [t["text"] for t in history if t["role"] == "bot"][-n:]
 
-    async def _call_provider(self, client, model, messages, tag: str) -> str | None:
+    async def _call_provider(self, client, model, messages, tag: str,
+                             max_tokens: int = 128, timeout: float = LLM_TIMEOUT) -> str | None:
         """呼叫單一 provider，含 429 retry 與 timeout。失敗回 None。"""
         for attempt in range(3):
             try:
@@ -1298,8 +1399,8 @@ class SassyBrain:
                     model=model,
                     messages=messages,
                     temperature=1.0,
-                    max_completion_tokens=128,
-                    timeout=LLM_TIMEOUT,
+                    max_completion_tokens=max_tokens,
+                    timeout=timeout,
                 )
                 return resp.choices[0].message.content or ""
             except Exception as e:
@@ -1308,23 +1409,27 @@ class SassyBrain:
                     logger.warning(f"[{tag}] 429 rate limit，2s 後重試 (attempt {attempt+1})")
                     await asyncio.sleep(2)
                 elif "timeout" in err.lower() or "timed out" in err.lower():
-                    logger.warning(f"[{tag}] timeout ({LLM_TIMEOUT}s)")
+                    logger.warning(f"[{tag}] timeout ({timeout}s)")
                     return None
                 else:
                     logger.warning(f"[{tag}] 失敗: {e}")
                     return None
         return None
 
-    async def _generate_with_fallback(self, messages, tag: str = "LLM") -> str | None:
+    async def _generate_with_fallback(self, messages, tag: str = "LLM", primary_model: str | None = None,
+                                      max_tokens: int = 128, timeout: float = LLM_TIMEOUT) -> str | None:
         """先試 primary（CLIProxyAPI），失敗 fallback 到 CGU。回 None 表示兩邊都掛。"""
         if self.primary_client:
-            raw = await self._call_provider(self.primary_client, self.primary_model, messages, "PRIMARY")
+            model = primary_model or self.primary_model
+            raw = await self._call_provider(self.primary_client, model, messages, "PRIMARY",
+                                            max_tokens=max_tokens, timeout=timeout)
             if raw is not None:
-                logger.info(f"[{tag}] PRIMARY 成功 ({self.primary_model})")
+                logger.info(f"[{tag}] PRIMARY 成功 ({model})")
                 return raw
             logger.warning(f"[{tag}] PRIMARY 失敗，嘗試 fallback")
         if self.fallback_client:
-            raw = await self._call_provider(self.fallback_client, self.fallback_model, messages, "FALLBACK")
+            raw = await self._call_provider(self.fallback_client, self.fallback_model, messages, "FALLBACK",
+                                            max_tokens=max_tokens, timeout=timeout)
             if raw is not None:
                 logger.info(f"[{tag}] FALLBACK 成功 ({self.fallback_model})")
                 return raw

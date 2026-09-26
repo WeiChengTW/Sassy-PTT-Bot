@@ -29,6 +29,17 @@ export interface Board {
   highlight: BoardHighlight | null
 }
 
+export interface AutoAlias {
+  name: string
+  reason: string
+  created: string
+  window_days: number
+}
+export interface NicknamesData {
+  max_per_member: number
+  members: { name: string; aliases: string[]; auto_aliases: AutoAlias[] }[]
+}
+
 let _userId = ''
 let _groupId = ''
 let _idToken = ''
@@ -88,8 +99,8 @@ export const api = {
     req<any>(`/admin/trips/${tripId}/update`, { method: 'POST', body: JSON.stringify(body) }),
   adminUpdateTripTitle: (tripId: string, title: string) =>
     req<any>(`/admin/trips/${tripId}/title`, { method: 'POST', body: JSON.stringify({ title }) }),
-  adminAddParticipants: (tripId: string, userIds: string[]) =>
-    req<any>(`/admin/trips/${tripId}/participants`, { method: 'POST', body: JSON.stringify({ user_ids: userIds }) }),
+  adminAddParticipants: (tripId: string, userIds: string[], replace = false) =>
+    req<any>(`/admin/trips/${tripId}/participants`, { method: 'POST', body: JSON.stringify({ user_ids: userIds, replace }) }),
   adminEndTrip: (tripId: string) => req<any>(`/admin/trips/${tripId}/end`, { method: 'POST' }),
   adminAwardBadges: (tripId: string) => req<any>(`/admin/trips/${tripId}/award-badges`, { method: 'POST' }),
   leaderboard: () => req<any>('/leaderboard'),
@@ -98,6 +109,7 @@ export const api = {
   topics: () => req<any>('/topics'),
   profile: (userId: string) => req<any>(`/profile/${userId}`),
   pulse: () => req<any>('/pulse'),
+  nicknames: () => req<NicknamesData>('/nicknames'),
   compare: (a: string, b: string) => req<any>(`/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`),
   adminAnalyzeTopics: () => req<{ updated: number; success: boolean }>('/admin/analyze-topics', { method: 'POST' }),
   adminGroups: () => req<any[]>('/admin/groups'),

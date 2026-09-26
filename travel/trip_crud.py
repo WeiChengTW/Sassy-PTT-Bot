@@ -60,6 +60,22 @@ def add_participants(trip_id: str, user_ids: list[str]) -> dict[str, int]:
     return {"added": added, "total": total}
 
 
+def set_participants(trip_id: str, user_ids: list[str]) -> dict[str, int]:
+    """以 user_ids 為準同步參與者：新的加入、沒勾的移除。回傳 {added, removed, total}。"""
+    wanted = set(user_ids)
+    with get_conn() as conn:
+        current = {r[0] for r in conn.execute(
+            "SELECT user_id FROM trip_participants WHERE trip_id = ?", (trip_id,)
+        )}
+        removed = current - wanted
+        conn.executemany(
+            "DELETE FROM trip_participants WHERE trip_id = ? AND user_id = ?",
+            [(trip_id, uid) for uid in removed],
+        )
+    result = add_participants(trip_id, [uid for uid in user_ids if uid not in current])
+    return {"added": result["added"], "removed": len(removed), "total": result["total"]}
+
+
 def end_trip(trip_id: str) -> dict:
     """結束旅行：status='ended'，記錄 ended_at。"""
     ended_at = int(time.time())

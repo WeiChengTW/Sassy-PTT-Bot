@@ -65,7 +65,6 @@ export function buildTripFlex(detail: any): FlexMessage {
       type: 'box',
       layout: 'horizontal',
       spacing: 'xs',
-      wrap: true,
       contents: tripTypes.slice(0, 4).map((ty) => ({
         type: 'text',
         text: `${emojiFor(ty)} ${labelFor(ty)}`,

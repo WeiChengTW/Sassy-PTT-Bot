@@ -121,3 +121,15 @@ def test_get_user_trips_participation_and_initiated(db):
     assert res["trips"][0]["title"] == "武嶺"
     assert res["trips"][0]["is_creator"] is False
     assert all("badge_emoji" in t for t in res["trips"])
+
+
+def test_set_participants_syncs_selection(db):
+    from travel.trip_crud import add_participants, create_trip, get_trip, set_participants
+    trip_id = create_trip("C1", "韓國小滑雪", "韓國", 1700000000, None, "U1")
+    add_participants(trip_id, ["U1", "U2"])
+    assert set_participants(trip_id, ["U2", "U3"]) == {"added": 1, "removed": 1, "total": 2}
+    with get_conn() as conn:
+        uids = {r[0] for r in conn.execute(
+            "SELECT user_id FROM trip_participants WHERE trip_id=?", (trip_id,))}
+    assert uids == {"U2", "U3"}
+    assert get_trip(trip_id)["status"] != "ended"   # 只存名單，不結束

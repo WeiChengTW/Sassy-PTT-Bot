@@ -328,3 +328,52 @@ def test_compare_requires_member(client):
     r = client.get("/liff/compare?a=U_MEMBER&b=U2",
                    headers={"X-LIFF-UserId": "U_STRANGER", "X-LIFF-GroupId": "C2"})
     assert r.status_code == 403
+
+
+def test_nicknames_only_for_main_group(client, monkeypatch, tmp_path):
+    import json
+    import corpus_config
+    p = tmp_path / "aliases.json"
+    p.write_text(json.dumps({
+        "Member": {"aliases": ["阿M"], "auto_aliases": [
+            {"name": "舊稱號", "reason": "r1", "created": "2026-09-13", "window_days": 7},
+            {"name": "新稱號", "reason": "r2", "created": "2026-09-20", "window_days": 7},
+        ]},
+        "Other": {"aliases": ["阿O"]},
+    }, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(corpus_config, "ALIASES_FILE_PATH", p)
+    headers = {**_headers(), "X-LIFF-GroupId": "C1"}
+
+    monkeypatch.setenv("MAIN_LINE_GROUP_ID", "C1")
+    data = client.get("/liff/nicknames", headers=headers).get_json()
+    assert [m["name"] for m in data["members"]] == ["Member"]
+    assert [a["name"] for a in data["members"][0]["auto_aliases"]] == ["新稱號", "舊稱號"]
+
+    monkeypatch.setenv("MAIN_LINE_GROUP_ID", "C_OTHER")
+    assert client.get("/liff/nicknames", headers=headers).get_json()["members"] == []
+
+
+def test_admin_participants_replace(client, db):
+    from travel.trip_crud import create_trip, add_participants
+    trip_id = create_trip("C1", "t", "x", 1700000000, None, "U_ADMIN")
+    add_participants(trip_id, ["U1", "U2"])
+    r = client.post(f"/liff/admin/trips/{trip_id}/participants",
+                    json={"user_ids": ["U2"], "replace": True}, headers=_headers("U_ADMIN"))
+    assert r.get_json() == {"added": 0, "removed": 1, "total": 1}
+    # 未帶 replace → 只新增（舊行為）
+    r = client.post(f"/liff/admin/trips/{trip_id}/participants",
+                    json={"user_ids": ["U3"]}, headers=_headers("U_ADMIN"))
+    assert r.get_json()["total"] == 2
+
+
+def test_admin_members_skips_reconciled_manual_ids(client, db):
+    # 已接回真實 id 的合成 id 只剩舊訊息 → 不應再以重複成員出現
+    insert_message({
+        "line_message_id": "old1", "group_id": "C1", "user_id": "manual:dead",
+        "user_name": "Member", "type": "text", "content": "舊訊息", "metadata": {},
+        "reply_to_message_id": None, "timestamp": int(time.time() * 1000),
+    })
+    r = client.get("/liff/admin/members", headers={**_headers("U_ADMIN"), "X-LIFF-GroupId": "C1"})
+    ids = [m["user_id"] for m in r.get_json()]
+    assert "manual:dead" not in ids
+    assert "U_MEMBER" in ids

@@ -17,6 +17,11 @@ export const TRIP_TYPES: TripType[] = [
   { value: 'theme_park', label: '主題樂園', emoji: '🎢' },
   { value: 'culture', label: '歷史文化', emoji: '⛩️' },
   { value: 'roadtrip', label: '自駕公路', emoji: '🚗' },
+  { value: 'snow', label: '雪地滑雪', emoji: '⛷️' },
+  { value: 'sports', label: '運動競技', emoji: '🏅' },
+  { value: 'party', label: '聚會派對', emoji: '🎉' },
+  { value: 'school', label: '校園回憶', emoji: '🏫' },
+  { value: 'meme', label: '經典名場面', emoji: '🤡' },
   { value: 'other', label: '其他漫遊', emoji: '🎒' },
 ]
 

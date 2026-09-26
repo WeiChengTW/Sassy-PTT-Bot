@@ -24,16 +24,20 @@ from travel.db import get_conn  # noqa: E402
 from travel.llm_analyzer import analyze_batch, BATCH_SIZE  # noqa: E402
 
 
-def fetch_pending(limit: int | None):
+def fetch_pending(limit: int | None, since: int | None = None):
     q = """SELECT id, user_name, content, timestamp
            FROM messages
            WHERE analyzed_at IS NULL AND content IS NOT NULL
-             AND type='text' AND length(content) > 1
-           ORDER BY timestamp ASC"""
+             AND type='text' AND length(content) > 1"""
+    params = []
+    if since:
+        q += " AND timestamp > ?"
+        params.append(since)
+    q += " ORDER BY timestamp ASC"
     if limit:
         q += f" LIMIT {int(limit)}"
     with get_conn() as conn:
-        return [dict(r) for r in conn.execute(q)]
+        return [dict(r) for r in conn.execute(q, params)]
 
 
 def write_results(results: list[dict]) -> int:
@@ -63,8 +67,8 @@ def write_results(results: list[dict]) -> int:
     return updated
 
 
-async def main_async(concurrency: int, limit: int | None):
-    pending = fetch_pending(limit)
+async def main_async(concurrency: int, limit: int | None, since: int | None = None):
+    pending = fetch_pending(limit, since)
     total = len(pending)
     if not total:
         print("沒有待分析訊息。")
@@ -106,8 +110,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--concurrency", type=int, default=8)
     ap.add_argument("--limit", type=int, default=None, help="只處理前 N 則（測試用）")
+    ap.add_argument("--since", type=int, default=None, help="只撈此 timestamp (ms) 之後的訊息")
     args = ap.parse_args()
-    asyncio.run(main_async(args.concurrency, args.limit))
+    asyncio.run(main_async(args.concurrency, args.limit, args.since))
 
 
 if __name__ == "__main__":

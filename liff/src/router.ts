@@ -19,6 +19,7 @@ const router = createRouter({
     { path: '/profile', component: () => import('@/views/ProfileView.vue'), meta: { requiresParticipant: true } },
     { path: '/pulse', component: () => import('@/views/GroupPulseView.vue'), meta: { requiresParticipant: true } },
     { path: '/compare', component: () => import('@/views/CompareView.vue'), meta: { requiresParticipant: true } },
+    { path: '/nicknames', component: () => import('@/views/NicknamesView.vue'), meta: { requiresParticipant: true } },
     { path: '/403', component: () => import('@/views/ForbiddenView.vue') },
   ],
 })

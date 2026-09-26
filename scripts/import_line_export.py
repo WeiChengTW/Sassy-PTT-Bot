@@ -14,11 +14,14 @@
   - 媒體只留標記 [貼圖]/[照片] 等，無實體
   - 分析欄位（keywords/sentiment/...）不填，需另跑 LLM 分析回填
 
-冪等：line_message_id 用 (group_id + timestamp + seq) 決定性合成，重跑不重複。
+冪等：line_message_id 用 (group_id + timestamp + seq + source) 決定性合成，重跑不重複。
+      source 為來源檔名 basename（預設空字串），不同來源檔案的同分鐘訊息不會互相碰撞。
 
 用法：
     python scripts/import_line_export.py --file "[LINE] ....txt" --dry-run
     DB_PATH=data/chat.db python scripts/import_line_export.py --file "[LINE] ....txt"
+    # MESSENGER 轉 LINE 格式匯入（不過濾 live cutoff、不寫 members）：
+    python scripts/import_line_export.py --file "[MESSENGER] ...txt" --no-cutoff --no-members
 """
 import argparse
 import hashlib
@@ -105,31 +108,38 @@ def parse(path: str):
     return messages, system
 
 
-def synth_line_id(group_id: str, ts: int, seq: int) -> str:
-    h = hashlib.sha1(f"{group_id}|{ts}|{seq}".encode()).hexdigest()[:16]
+def synth_line_id(group_id: str, ts: int, seq: int, source: str = "") -> str:
+    """決定性合成 line_message_id。
+    source 傳入來源檔名 basename，讓不同來源檔案的同分鐘訊息有不同 id，避免跨檔碰撞。
+    預設空字串使舊版（未傳 source）的行為完全不變。
+    """
+    h = hashlib.sha1(f"{group_id}|{ts}|{seq}|{source}".encode()).hexdigest()[:16]
     return f"import:{h}"
 
 
-def get_live_cutoff():
+def get_live_cutoff(target_group_id: str | None = None):
     """本群最早的 live 訊息時間戳（毫秒）。回填只匯入此時間之前，重疊區交給 live。
     無 DB / 無資料時回 None（不設限）。"""
+    gid = target_group_id or GROUP_ID
     try:
         from travel.db import get_conn
         with get_conn() as conn:
             row = conn.execute(
                 "SELECT MIN(timestamp) FROM messages WHERE group_id=? "
                 "AND line_message_id NOT LIKE 'import:%'",
-                (GROUP_ID,),
+                (gid,),
             ).fetchone()
-        return row[0] if row and row[0] is not None else None
+            if row and row[0] is not None:
+                return row[0]
     except Exception:
-        return None
+        pass
+    return None
 
 
-def dry_run(messages, system, keep_bots):
+def dry_run(messages, system, keep_bots, no_cutoff=False):
     speakers = Counter(m["user_name"] for m in messages)
     kept = [m for m in messages if keep_bots or m["user_name"] not in KNOWN_BOTS]
-    cutoff = get_live_cutoff()
+    cutoff = None if no_cutoff else get_live_cutoff()
     overlap = 0
     if cutoff is not None:
         before = len(kept)
@@ -163,11 +173,13 @@ def dry_run(messages, system, keep_bots):
         print(f"  {t:%Y-%m-%d %H:%M}  {m['user_name']:<8} [{m['type']}] {preview}")
 
 
-def do_import(messages, keep_bots, no_members=False):
+def do_import(messages, keep_bots, no_members=False, source: str = "", no_cutoff: bool = False,
+              target_group_id: str | None = None):
     from travel.db import get_conn, init_db
     init_db()
+    group_id = target_group_id or GROUP_ID
     kept = [m for m in messages if keep_bots or m["user_name"] not in KNOWN_BOTS]
-    cutoff = get_live_cutoff()
+    cutoff = None if no_cutoff else get_live_cutoff(group_id)
     if cutoff is not None:
         before = len(kept)
         kept = [m for m in kept if m["timestamp"] < cutoff]
@@ -182,7 +194,7 @@ def do_import(messages, keep_bots, no_members=False):
     with get_conn() as conn:
         # 先讀已存在成員的 name→user_id
         for r in conn.execute(
-            "SELECT display_name, user_id FROM members WHERE group_id=?", (GROUP_ID,)
+            "SELECT display_name, user_id FROM members WHERE group_id=?", (group_id,)
         ):
             name_to_id[r["display_name"]] = r["user_id"]
         # 再用 live messages 的真實 user_id 覆蓋（U 開頭優先於 manual:/imported: 合成）
@@ -190,7 +202,7 @@ def do_import(messages, keep_bots, no_members=False):
             "SELECT user_name, user_id FROM messages WHERE group_id=? "
             "AND line_message_id NOT LIKE 'import:%' AND user_name IS NOT NULL "
             "GROUP BY user_id",
-            (GROUP_ID,),
+            (group_id,),
         ):
             existing = name_to_id.get(r["user_name"])
             if existing is None or existing.startswith(("manual:", "imported:")):
@@ -204,14 +216,14 @@ def do_import(messages, keep_bots, no_members=False):
             ts = m["timestamp"]
             seq = seen_ts[ts]
             seen_ts[ts] += 1
-            lid = synth_line_id(GROUP_ID, ts, seq)
+            lid = synth_line_id(group_id, ts, seq, source)
             try:
                 conn.execute(
                     """INSERT INTO messages
                        (line_message_id, group_id, user_id, user_name, type,
                         content, metadata, timestamp)
                        VALUES (?, ?, ?, ?, ?, ?, '{}', ?)""",
-                    (lid, GROUP_ID, uid, name, m["type"], m["content"], ts),
+                    (lid, group_id, uid, name, m["type"], m["content"], ts),
                 )
                 inserted += 1
             except Exception:
@@ -226,17 +238,17 @@ def do_import(messages, keep_bots, no_members=False):
                     continue
                 exists = conn.execute(
                     "SELECT 1 FROM members WHERE group_id=? AND display_name=?",
-                    (GROUP_ID, name),
+                    (group_id, name),
                 ).fetchone()
                 if exists:
                     continue
                 resolved = 0 if uid.startswith(("manual:", "imported:")) else 1
-                source = "manual" if uid.startswith(("manual:", "imported:")) else "auto"
+                member_source = "manual" if uid.startswith(("manual:", "imported:")) else "auto"
                 conn.execute(
                     """INSERT INTO members
                        (group_id, user_id, display_name, source, resolved, created_at)
                        VALUES (?, ?, ?, ?, ?, ?)""",
-                    (GROUP_ID, uid, name, source, resolved, now),
+                    (group_id, uid, name, member_source, resolved, now),
                 )
     print(f"匯入完成：inserted={inserted}, 跳過重複={dup}, 保留發言者={len(name_to_id)}, 寫入members={not no_members}")
 
@@ -247,13 +259,18 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--keep-bots", action="store_true", help="連機器人一起匯入")
     ap.add_argument("--no-members", action="store_true", help="只匯入訊息進 messages，不將發言者加入 members 名冊")
+    ap.add_argument("--no-cutoff", action="store_true",
+                    help="跳過 live cutoff 重疊過濾（用於非主群來源，如 MESSENGER 轉檔）")
+    ap.add_argument("--group-id", help="指定 group_id（預設為主群組 ID）")
     args = ap.parse_args()
 
+    source = os.path.basename(args.file)
     messages, system = parse(args.file)
     if args.dry_run:
-        dry_run(messages, system, args.keep_bots)
+        dry_run(messages, system, args.keep_bots, no_cutoff=args.no_cutoff)
     else:
-        do_import(messages, args.keep_bots, args.no_members)
+        do_import(messages, args.keep_bots, args.no_members,
+                  source=source, no_cutoff=args.no_cutoff, target_group_id=args.group_id)
 
 
 if __name__ == "__main__":

@@ -198,9 +198,17 @@
 
         <button
           v-if="detail.trip.status !== 'ended'"
+          @click="saveParticipants"
+          :disabled="actionLoading"
+          class="mt-4 w-full border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 rounded-xl py-3 text-sm font-semibold disabled:opacity-50 transition-all btn-press"
+        >
+          💾 僅儲存名單（活動繼續進行）
+        </button>
+        <button
+          v-if="detail.trip.status !== 'ended'"
           @click="saveAndAward"
           :disabled="actionLoading || selected.size === 0"
-          class="mt-4 w-full bg-purple-600 hover:bg-purple-700 text-white rounded-xl py-3 text-sm font-bold shadow-md shadow-purple-500/20 disabled:opacity-50 transition-all btn-press"
+          class="mt-2.5 w-full bg-purple-600 hover:bg-purple-700 text-white rounded-xl py-3 text-sm font-bold shadow-md shadow-purple-500/20 disabled:opacity-50 transition-all btn-press"
         >
           💾 儲存名單並結束活動、發放徽章
         </button>
@@ -369,9 +377,14 @@ async function loadMembers() {
 }
 
 async function saveParticipants() {
+  actionLoading.value = true
   message.value = ''; error.value = ''
-  await api.adminAddParticipants(tripId, [...selected.value])
-  await load()
+  try {
+    const res = await api.adminAddParticipants(tripId, [...selected.value], true)
+    await load()
+    message.value = `名單已儲存（${res.total} 人，新增 ${res.added}、移除 ${res.removed}）`
+  } catch (e: any) { error.value = e.message }
+  finally { actionLoading.value = false }
 }
 
 async function saveAndAward() {
@@ -379,7 +392,7 @@ async function saveAndAward() {
   actionLoading.value = true
   message.value = ''; error.value = ''
   try {
-    await api.adminAddParticipants(tripId, [...selected.value])
+    await api.adminAddParticipants(tripId, [...selected.value], true)
     await api.adminEndTrip(tripId)
     const res = await api.adminAwardBadges(tripId)
     await load()

@@ -11,6 +11,7 @@
 
 用法：
     python index_group_memory.py --rebuild      # 全量重建（初次 backfill / 換模型）
+    python index_group_memory.py --resume       # 斷點續建：刪 collection 後重建，中斷可重跑
     python index_group_memory.py                # 增量：只補水位線之後的新訊息
 """
 import argparse
@@ -59,13 +60,13 @@ def _save_watermark(ts: int) -> None:
 
 
 def _fetch_messages(since_ts: int) -> list[dict]:
-    """取主群組真人文字訊息，依 timestamp 升序。since_ts=0 代表全量。"""
+    """取主群組及歷史匯入群組（imported:*）真人文字訊息，依 timestamp 升序。since_ts=0 代表全量。"""
     with get_conn() as conn:
         rows = conn.execute(
             """
             SELECT user_name, content, timestamp
             FROM messages
-            WHERE group_id = ?
+            WHERE (group_id = ? OR group_id LIKE 'imported:%')
               AND type = 'text'
               AND is_deleted = 0
               AND content IS NOT NULL AND content != ''
@@ -116,7 +117,7 @@ def _build_windows(msgs: list[dict]) -> list[dict]:
     return windows
 
 
-def run(rebuild: bool = False) -> None:
+def run(rebuild: bool = False, resume: bool = False) -> None:
     init_db()
     try:
         import torch
@@ -126,7 +127,14 @@ def run(rebuild: bool = False) -> None:
     emb_fn = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=EMBEDDING_MODEL_NAME)
     client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
 
-    if rebuild:
+    if rebuild and not resume:
+        try:
+            client.delete_collection(name=GROUP_MEMORY_COLLECTION)
+        except Exception:
+            pass
+        since_ts = 0
+    elif resume:
+        # 刪掉後重建，但每批都做去重：中斷後重跑只補缺少的視窗
         try:
             client.delete_collection(name=GROUP_MEMORY_COLLECTION)
         except Exception:
@@ -140,7 +148,7 @@ def run(rebuild: bool = False) -> None:
         name=GROUP_MEMORY_COLLECTION, embedding_function=emb_fn
     )
 
-    if not rebuild and since_ts > 0:
+    if not rebuild and not resume and since_ts > 0:
         # 增量：先刪掉重掃範圍內的舊視窗，避免邊界視窗成長後留下過期殘影
         try:
             collection.delete(where={"first_ts": {"$gte": since_ts}})
@@ -156,11 +164,14 @@ def run(rebuild: bool = False) -> None:
         logger.info("沒有可索引的視窗，結束。")
         return
 
-    batch_size = 64
+    # rebuild 不去重（每次全量）；resume / 增量 都做去重（支援斷點續跑）
+    skip_dedup = (rebuild and not resume)
+    batch_size = 32  # 較小批次，減少單次記憶體壓力，中斷損失小
+    done = 0
     for i in range(0, len(windows), batch_size):
         batch = windows[i:i + batch_size]
-        # 若集合中已有相同 deterministic ID 則略過重複計算 embedding（支援斷點續跑）
-        if not rebuild:
+        if not skip_dedup:
+            # 已存在的 ID 直接跳過（斷點續跑核心）
             try:
                 res = collection.get(ids=[w["id"] for w in batch])
                 existing_ids = set(res.get("ids", []))
@@ -168,6 +179,7 @@ def run(rebuild: bool = False) -> None:
             except Exception:
                 pass
         if not batch:
+            done += len(windows[i:i + batch_size])
             continue
         try:
             collection.upsert(
@@ -178,8 +190,8 @@ def run(rebuild: bool = False) -> None:
                     for w in batch
                 ],
             )
-            if i % 640 == 0:
-                logger.info(f"已寫入 {i}/{len(windows)} ...")
+            done += len(batch)
+            logger.info(f"進度 {i + len(batch)}/{len(windows)} （collection 共 {collection.count()} 筆）")
         except Exception as e:
             logger.error(f"批次 {i} upsert 失敗: {e}")
 
@@ -190,5 +202,6 @@ def run(rebuild: bool = False) -> None:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--rebuild", action="store_true", help="全量重建（初次 / 換模型）")
+    ap.add_argument("--resume", action="store_true", help="斷點續建：刪後重建，中斷可重跑只補缺")
     args = ap.parse_args()
-    run(rebuild=args.rebuild)
+    run(rebuild=args.rebuild, resume=args.resume)

@@ -8,3 +8,4 @@ openai==2.24.0
 python-dotenv==1.2.1
 requests==2.33.0
 sentence-transformers==5.4.0
+pypinyin==0.55.0

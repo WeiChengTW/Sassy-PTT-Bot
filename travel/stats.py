@@ -132,7 +132,7 @@ def _compute_group_health(conn, group_id: str, pf: str, pp: list) -> dict:
         (group_id, *pp),
     ).fetchone()[0] or 0
     active_senders = conn.execute(
-        f"SELECT COUNT(DISTINCT user_id) FROM messages WHERE group_id=?{pf}",
+        f"SELECT COUNT(DISTINCT user_id) FROM messages WHERE group_id=?{pf} AND user_id NOT LIKE 'imported:%'",
         (group_id, *pp),
     ).fetchone()[0] or 0
 
@@ -168,7 +168,7 @@ def _compute_group_health(conn, group_id: str, pf: str, pp: list) -> dict:
         "SELECT COUNT(*) FROM members WHERE group_id=?", (group_id,)
     ).fetchone()[0] or 0
     denom = roster if roster else active_senders
-    participation_score = (active_senders / denom * 100) if denom else 0.0
+    participation_score = min(100.0, (active_senders / denom * 100)) if denom else 0.0
 
     # 加權（情緒缺席時按比例重新分配權重）
     weights = {"activity": 0.30, "diversity": 0.25, "sentiment": 0.25, "participation": 0.20}

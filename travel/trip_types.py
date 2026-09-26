@@ -11,6 +11,7 @@ import json
 VALID_TYPES: set[str] = {
     "beach", "mountain", "camping", "hotspring", "city",
     "food", "abroad", "theme_park", "culture", "roadtrip", "other",
+    "school", "meme", "party", "sports", "snow",
 }
 
 
